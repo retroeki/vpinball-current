@@ -191,21 +191,42 @@ static void* crash_watchdog_thread(void* arg)
          CRASH_LOG("Watchdog sent FATAL_ERROR, now sending PLAYER_CLOSED");
          VPinballLib::VPinballLib::SendEvent(VPINBALL_EVENT_PLAYER_CLOSED, nullptr);
 
-         CRASH_LOG("Watchdog finished sending events, chaining to old handler for Crashlytics");
+         CRASH_LOG("Watchdog finished sending events; exiting cleanly so the OS does not record a crash");
 
-         // Re-raise signal with old handler so Crashlytics NDK captures the crash
-         // Restore the old handler first, then re-raise the signal
-         if (sig > 0 && sig < 32 && (s_oldHandlers[sig].sa_sigaction != nullptr || s_oldHandlers[sig].sa_handler != SIG_DFL)) {
-            sigaction(sig, &s_oldHandlers[sig], nullptr);
-            raise(sig);
-         }
-
-         break;
+         // Do NOT re-raise the signal. Re-raising hands the fault to Android's default handler,
+         // which writes a tombstone and makes the OS count this as REASON_CRASH_NATIVE in Play
+         // vitals - even though the fault has already been caught, contained to :native_process,
+         // and reported to Crashlytics via the crash breadcrumb (see VpxCrashReporter.kt). The
+         // FATAL_ERROR event above wrote that breadcrumb synchronously on this thread, so the
+         // true backtrace is already safely on disk; the old re-raise only ever produced a
+         // useless duplicate NDK report collapsed onto this watchdog frame.
+         //
+         // Exit cleanly instead. The OS records REASON_EXIT_SELF (a normal exit, not a crash),
+         // the main process observes the dropped binder connection and returns the user to the
+         // library, and the real crash is uploaded on the next main-process launch. Use _exit,
+         // NOT exit(): static/atexit destructors must not run in a process whose heap may be
+         // corrupted by the very fault we just caught (cf. the g_bgfxIsAlive late-dtor guard).
+         _exit(0);
       }
    }
 
    CRASH_LOG("Watchdog thread exiting");
    return nullptr;
+}
+
+// Hard deadline (seconds) for the crash-report path. The normal path (SendEvent -> JNI ->
+// blocking breadcrumb write) completes in milliseconds; this is set well above that but below
+// the ANR window. If a second fault parks the watchdog, or the report path wedges, the failsafe
+// alarm below forces a clean exit so a stuck crash never surfaces as an ANR in Play vitals.
+static constexpr unsigned int FAILSAFE_EXIT_TIMEOUT_SECS = 8;
+
+// Minimal SIGALRM handler: force a clean process exit. _exit is async-signal-safe; we deliberately
+// do NOT re-raise, so the OS records REASON_EXIT_SELF (a normal exit, not a crash) - same rationale
+// as the watchdog's own exit path.
+static void vpinball_failsafe_exit(int /*sig*/)
+{
+   CRASH_LOG("Failsafe timeout (%us) fired - crash-report path stalled, forcing clean _exit(0)", FAILSAFE_EXIT_TIMEOUT_SECS);
+   _exit(0);
 }
 
 // Signal handler using SA_SIGINFO to preserve crash context
@@ -257,6 +278,23 @@ static void vpinball_sigsegv_handler(int sig, siginfo_t* info, void* context)
    s_crashSignal.store(sig);
    sem_post(&s_crashSemaphore);
 
+   // Arm a hard-deadline failsafe so the process ALWAYS exits cleanly, even if the report
+   // path (SendEvent -> JNI -> breadcrumb) wedges or a second fault parks the watchdog in the
+   // s_crashHandled guard below. We install the SIGALRM handler HERE rather than at init so we
+   // never interfere with any SIGALRM/ITIMER_REAL use during normal play (e.g. Wine timers) -
+   // by the time we reach this point the process is being torn down and nobody else's alarm
+   // matters. sigaction()/alarm() are async-signal-safe; this runs only on the first fault
+   // (subsequent faults hit the s_crashHandled guard above and never get here).
+   {
+      struct sigaction fa;
+      memset(&fa, 0, sizeof(fa));
+      sigemptyset(&fa.sa_mask);
+      fa.sa_handler = vpinball_failsafe_exit;
+      fa.sa_flags = 0;
+      sigaction(SIGALRM, &fa, nullptr);
+      alarm(FAILSAFE_EXIT_TIMEOUT_SECS);
+   }
+
    // Block this thread forever - let watchdog send events and Java show error screen
    // Do NOT chain to old handler - that would kill the process
    CRASH_LOG("Signal handler blocking - waiting for error screen to be shown");
@@ -278,11 +316,15 @@ static void install_crash_handler()
       sa.sa_sigaction = vpinball_sigsegv_handler;
       sa.sa_flags = SA_SIGINFO;  // Use SA_SIGINFO to get siginfo_t and context
 
-      // Install handlers - save old handlers so we can chain to Crashlytics after user responds
+      // Install handlers for every fatal fault signal. The watchdog catches these, reports via
+      // the crash breadcrumb, and exits cleanly (see crash_watchdog_thread) so none of them reach
+      // the OS default handler and get counted as a native crash in Play vitals. Old handlers are
+      // still saved (sigaction's 3rd arg) for diagnostics; we intentionally no longer chain to them.
       sigaction(SIGSEGV, &sa, &s_oldHandlers[SIGSEGV]);
       sigaction(SIGABRT, &sa, &s_oldHandlers[SIGABRT]);
       sigaction(SIGFPE, &sa, &s_oldHandlers[SIGFPE]);
       sigaction(SIGBUS, &sa, &s_oldHandlers[SIGBUS]);
+      sigaction(SIGILL, &sa, &s_oldHandlers[SIGILL]);
 
       CRASH_LOG("Crash handler system installed (captures stack trace, blocks for error screen)");
    }
