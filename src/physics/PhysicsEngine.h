@@ -68,6 +68,8 @@ public:
    const vector<HitObject *>& GetHitObjects() const { return m_hitoctree.GetHitObjects(); }
    vector<HitObject *> GetUIHitObjects(IEditable *editable);
 
+   const vector<HitFlipper *>& GetFlippers() const { return m_vFlippers; }
+
 private:
    void AddCabinetBoundingHitShapes(PinTable *const table);
    void PhysicsSimulateCycle(float dtime); // Perform continuous collision detection for the given amount of delta time

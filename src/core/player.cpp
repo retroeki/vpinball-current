@@ -50,6 +50,8 @@ static size_t getAvailableMemoryMB() {
    return availMB;
 }
 #endif
+#include "core/replay/ReplayRecorder.h"
+#include "core/replay/ReplayGhost.h"
 #include "renderer/Anaglyph.h"
 #include "renderer/VRDevice.h"
 #include "renderer/typedefs3D.h"
@@ -420,6 +422,12 @@ Player::Player(PinTable *const table, const int playMode)
    const float maxSlope = (m_ptable->m_overridePhysics ? m_ptable->m_fOverrideMaxSlope : m_ptable->m_angletiltMax);
    const float slope = lerp(minSlope, maxSlope, m_ptable->m_globalDifficulty);
    m_physics->SetGravity(slope, m_ptable->m_overridePhysics ? m_ptable->m_fOverrideGravityConstant : m_ptable->m_Gravity);
+
+   if (!IsEditorMode() && m_ptable->m_settings.GetStandalone_ReplayRecord())
+      m_replayRecorder = new ReplayRecorder(this);
+
+   if (!IsEditorMode() && m_ptable->m_settings.GetStandalone_ReplayGhost())
+      m_replayGhost = new ReplayGhost(this, g_pvp->GetPrefPath() + "replays" + PATH_SEPARATOR_CHAR + "last-session.vpr");
 
    InitFPS();
 
@@ -868,6 +876,18 @@ Player::~Player()
    // Signal plugins early since most fields will become invalid
    VPXPluginAPIImpl::GetInstance().OnGameEnd();
 
+   // Stop recording and persist the ring buffer before anything it references is torn down.
+   // Phase 0 debug behavior: always dump the last session so recording can be verified on device.
+   if (m_replayRecorder)
+   {
+      ReplayRecorder *const recorder = m_replayRecorder;
+      m_replayRecorder = nullptr; // physics no longer feeds the recorder from here on
+      recorder->SaveToFile(g_pvp->GetPrefPath() + "replays" + PATH_SEPARATOR_CHAR + "last-session.vpr");
+      delete recorder;
+   }
+   delete m_replayGhost;
+   m_replayGhost = nullptr;
+
    // signal the script that the game is now exited to allow any cleanup
    if (!IsEditorMode())
    {
@@ -1281,6 +1301,8 @@ HitBall *Player::CreateBall(const float x, const float y, const float z, const f
    if (!m_pactiveballDebug)
       m_pactiveballDebug = &m_pBall->m_hitBall;
    m_vball.push_back(&m_pBall->m_hitBall);
+   if (m_replayRecorder)
+      m_replayRecorder->OnBallCreated(&m_pBall->m_hitBall);
    return &m_pBall->m_hitBall;
 }
 
@@ -1288,6 +1310,9 @@ void Player::DestroyBall(HitBall *pHitBall)
 {
    assert(pHitBall);
    if (!pHitBall) return;
+
+   if (m_replayRecorder)
+      m_replayRecorder->OnBallDestroyed(pHitBall);
 
    RemoveFromVectorSingle(m_vball, pHitBall);
    m_vballDelete.push_back(pHitBall->m_pBall);

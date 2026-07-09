@@ -47,6 +47,10 @@ set(VPX_SOURCES
    src/core/vpinball_h.h
    src/core/player.cpp
    src/core/player.h
+   src/core/replay/ReplayRecorder.cpp
+   src/core/replay/ReplayRecorder.h
+   src/core/replay/ReplayGhost.cpp
+   src/core/replay/ReplayGhost.h
    src/core/ReelDmd.cpp
    src/core/ReelDmd.h
    src/core/ReelClassifier.cpp

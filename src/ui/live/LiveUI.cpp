@@ -13,6 +13,7 @@
 
 #include "plugins/VPXPlugin.h"
 #include "core/VPXPluginAPIImpl.h"
+#include "core/replay/ReplayGhost.h"
 
 #include "imgui/imgui.h"
 #include "imgui/imgui_impl_sdl3.h"
@@ -359,6 +360,10 @@ void LiveUI::RenderUI()
    { // No UI displayed: process ball control & throw balls
       m_ballControl.Update(width, height);
    }
+
+   // Replay ghost debug overlay (previous session's recorded ball path)
+   if (m_player->m_replayGhost)
+      m_player->m_replayGhost->Draw();
 
    // Display plumb state overlay
    m_plumbOverlay.Update();

@@ -176,6 +176,9 @@ public:
 
    PhysicsEngine* m_physics = nullptr;
 
+   class ReplayRecorder *m_replayRecorder = nullptr; // gameplay state recorder, only exists when Standalone/ReplayRecord is set
+   class ReplayGhost *m_replayGhost = nullptr; // debug ghost playback of the previous session, only exists when Standalone/ReplayGhost is set
+
    vector<HitBall *> m_vball;
    vector<IEditable *> m_vhitables; // all Renderable parts obtained from the table's list of Editables
 

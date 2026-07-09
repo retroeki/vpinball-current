@@ -9,6 +9,7 @@
 #include "plugins/MsgPlugin.h"
 #include "plugins/VPXPlugin.h"
 #include "core/VPXPluginAPIImpl.h"
+#include "core/replay/ReplayRecorder.h"
 
 #include "utils/ushock_output.h"
 
@@ -658,6 +659,9 @@ void PhysicsEngine::UpdatePhysics()
       // Store new position of balls for ball trails
       for (const auto hitBall : g_pplayer->m_vball)
          hitBall->OnPhysicStepProcessed(g_pplayer->m_time_msec);
+
+      if (g_pplayer->m_replayRecorder)
+         g_pplayer->m_replayRecorder->OnPhysicsCycle();
 
       //PLOGD << "PT: " << physics_diff_time << ' ' << physics_to_graphic_diff_time << ' ' << (uint32_t)(m_curPhysicsFrameTime/1000) << ' ' << (uint32_t)(initial_time_usec/1000) << ' ' << cur_time_msec;
 

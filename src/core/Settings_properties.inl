@@ -1371,6 +1371,8 @@ PropBool(Standalone, Haptics, "Haptics"s, ""s, g_isMobile);
 PropBool(Standalone, TouchZonesForced, "Force Touch Zones"s, "Always use hardcoded touch zones, ignoring table overrides"s, false);
 PropBool(Standalone, EmCreditDualSend, "EM Credit Dual-Send"s, "Also deliver the legacy '5' coin key on Add Credit, for EM/original tables that hard-code the '5' credit key instead of '3'. Host sets this for non-PinMAME tables only."s, false);
 PropBool(Standalone, ResetLogOnPlay, "Reset Log on Play"s, ""s, g_isMobile);
+PropBool(Standalone, ReplayRecord, "Record Replay"s, "Master switch for the replay system: record gameplay state (balls, flippers) into a rolling buffer for replay clips"s, false);
+PropBool(Standalone, ReplayGhost, "Replay Ghost Overlay"s, "Debug overlay: draw the previous session's recorded ball path as looping ghost markers over live play"s, false);
 PropString(Standalone, VPRegPath, "VPRegPath"s, ""s, ""s);
 
 // Editor settings
