@@ -112,6 +112,10 @@ private:
    HitGate *m_phitgate = nullptr;
    float m_lastAngle = FLT_MAX;
 
+public:
+   HitGate *GetHitGate() const { return m_phitgate; } // replay state channel access
+private:
+
    float m_vertexbuffer_angle = FLT_MAX;
    std::shared_ptr<MeshBuffer> m_wireMeshBuffer;
    std::shared_ptr<MeshBuffer> m_bracketMeshBuffer;

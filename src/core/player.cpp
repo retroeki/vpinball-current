@@ -52,6 +52,7 @@ static size_t getAvailableMemoryMB() {
 #endif
 #include "core/replay/ReplayRecorder.h"
 #include "core/replay/ReplayGhost.h"
+#include "core/replay/ReplayPlayer.h"
 #include "renderer/Anaglyph.h"
 #include "renderer/VRDevice.h"
 #include "renderer/typedefs3D.h"
@@ -423,10 +424,21 @@ Player::Player(PinTable *const table, const int playMode)
    const float slope = lerp(minSlope, maxSlope, m_ptable->m_globalDifficulty);
    m_physics->SetGravity(slope, m_ptable->m_overridePhysics ? m_ptable->m_fOverrideGravityConstant : m_ptable->m_Gravity);
 
-   if (!IsEditorMode() && m_ptable->m_settings.GetStandalone_ReplayRecord())
+   if (!IsEditorMode() && m_ptable->m_settings.GetStandalone_ReplayPlayback())
+   {
+      m_replayPlayer = new ReplayPlayer(this, g_pvp->GetPrefPath() + "replays" + PATH_SEPARATOR_CHAR + "last-session.vpr");
+      if (!m_replayPlayer->IsLoaded())
+      { // fall back to a normal live game when there is no recording to play
+         delete m_replayPlayer;
+         m_replayPlayer = nullptr;
+      }
+   }
+
+   // Recording and the ghost overlay only make sense for a live game
+   if (!IsEditorMode() && m_replayPlayer == nullptr && m_ptable->m_settings.GetStandalone_ReplayRecord())
       m_replayRecorder = new ReplayRecorder(this);
 
-   if (!IsEditorMode() && m_ptable->m_settings.GetStandalone_ReplayGhost())
+   if (!IsEditorMode() && m_replayPlayer == nullptr && m_ptable->m_settings.GetStandalone_ReplayGhost())
       m_replayGhost = new ReplayGhost(this, g_pvp->GetPrefPath() + "replays" + PATH_SEPARATOR_CHAR + "last-session.vpr");
 
    InitFPS();
@@ -708,7 +720,7 @@ Player::Player(PinTable *const table, const int playMode)
    }
    #endif
 
-   if (!IsEditorMode())
+   if (!IsEditorMode() && m_replayPlayer == nullptr) // replay playback loads the table as scenery: no script, hence no PinMAME/FlexDMD either
    {
       PLOGI << "Starting script"; // For profiling
       m_progressDialog.SetProgress("Starting Game Scripts..."s);
@@ -887,6 +899,8 @@ Player::~Player()
    }
    delete m_replayGhost;
    m_replayGhost = nullptr;
+   delete m_replayPlayer;
+   m_replayPlayer = nullptr;
 
    // signal the script that the game is now exited to allow any cleanup
    if (!IsEditorMode())
@@ -1653,13 +1667,21 @@ void Player::UpdateGameLogic()
    if (!IsEditorMode())
    {
       m_pininput.ProcessInput(); // Trigger key events to sync with controller
-      m_physics->UpdatePhysics(); // Update physics (also triggering events, syncing with controller)
-      // TODO These updates should also be done directly in the physics engine after collision events
-      FireSyncController(); // Trigger script sync event (to sync solenoids back)
+      if (m_replayPlayer)
+         m_replayPlayer->Update(); // Replay playback: drive recorded state instead of simulating
+      else
+      {
+         m_physics->UpdatePhysics(); // Update physics (also triggering events, syncing with controller)
+         // TODO These updates should also be done directly in the physics engine after collision events
+         FireSyncController(); // Trigger script sync event (to sync solenoids back)
 
-      // Composite EM score reels into the default DMD frame so the ScoreView shows them.
-      if (m_reelDmd && m_reelDmd->ShouldActivate())
-         m_reelDmd->Update();
+         // Composite EM score reels into the default DMD frame so the ScoreView shows them.
+         if (m_reelDmd && m_reelDmd->ShouldActivate())
+            m_reelDmd->Update();
+
+         if (m_replayRecorder)
+            m_replayRecorder->OnFrame(); // diff-record script-driven visual state at frame cadence
+      }
    }
 
    MsgPI::MsgPluginManager::GetInstance().ProcessAsyncCallbacks();

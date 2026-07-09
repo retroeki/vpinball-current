@@ -49,8 +49,14 @@ set(VPX_SOURCES
    src/core/player.h
    src/core/replay/ReplayRecorder.cpp
    src/core/replay/ReplayRecorder.h
+   src/core/replay/ReplayData.cpp
+   src/core/replay/ReplayData.h
+   src/core/replay/ReplayState.cpp
+   src/core/replay/ReplayState.h
    src/core/replay/ReplayGhost.cpp
    src/core/replay/ReplayGhost.h
+   src/core/replay/ReplayPlayer.cpp
+   src/core/replay/ReplayPlayer.h
    src/core/ReelDmd.cpp
    src/core/ReelDmd.h
    src/core/ReelClassifier.cpp

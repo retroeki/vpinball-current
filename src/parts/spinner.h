@@ -110,6 +110,7 @@ private:
 
    // ISpinner
 public:
+   HitSpinner *GetHitSpinner() const { return m_phitspinner; } // replay state channel access
    STDMETHOD(get_Surface)(/*[out, retval]*/ BSTR *pVal);
    STDMETHOD(put_Surface)(/*[in]*/ BSTR newVal);
    STDMETHOD(get_Y)(/*[out, retval]*/ float *pVal);

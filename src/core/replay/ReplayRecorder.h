@@ -9,6 +9,8 @@
 #include <mutex>
 #include <unordered_map>
 
+#include "ReplayState.h"
+
 class Player;
 class HitBall;
 class HitFlipper;
@@ -31,6 +33,10 @@ public:
    // Called by PhysicsEngine at the end of every 1 ms physics cycle.
    void OnPhysicsCycle();
 
+   // Called by Player once per rendered frame: diff-record script/physics-driven
+   // visual state (lights, primitives, flashers, spinners, gates, targets).
+   void OnFrame();
+
    // Called by Player when balls enter/leave the simulation.
    void OnBallCreated(HitBall *pHitBall);
    void OnBallDestroyed(HitBall *pHitBall);
@@ -42,16 +48,17 @@ public:
    static constexpr uint32_t BALL_SAMPLE_INTERVAL_MS = 8;    // 125 Hz ball transforms
    static constexpr uint32_t RING_WINDOW_MS = 90 * 1000;     // keep the last 90 s
    static constexpr size_t CHUNK_SIZE = 64 * 1024;
-   static constexpr uint16_t FORMAT_VERSION = 0;
+   static constexpr uint16_t FORMAT_VERSION = 1;
 
-   // Record types (format v0)
+   // Record types (format v1)
    enum RecordType : uint8_t
    {
-      REC_KEYFRAME = 0,     // t u32, nBalls u8 { id u8, radius f32, pos 3xf32, quat 4xi16 }, nFlippers u8 { id u8, angle f32 }
+      REC_KEYFRAME = 0,     // t u32, nBalls u8 { id u8, radius f32, pos 3xf32, quat 4xi16 }, nFlippers u8 { id u8, angle f32 }, nStateFields u16, f32 x nStateFields (registry order)
       REC_BALL_SAMPLE = 1,  // t u32, nBalls u8 { id u8, pos 3xf32, quat 4xi16 }
       REC_BALL_CREATE = 2,  // t u32, id u8, radius f32, mass f32, pos 3xf32
       REC_BALL_DESTROY = 3, // t u32, id u8
       REC_FLIPPER = 4,      // t u32, id u8, angle f32
+      REC_STATE = 5,        // t u32, slot u16, value f32
    };
 
 private:
@@ -70,6 +77,7 @@ private:
 
    // append helpers into m_cur.data
    void PutU8(uint8_t v);
+   void PutU16(uint16_t v);
    void PutU32(uint32_t v);
    void PutF32(float v);
    void PutQuat(const float q[4]);
@@ -88,6 +96,11 @@ private:
    std::vector<HitFlipper *> m_flippers;    // bound lazily on first physics cycle
    std::vector<float> m_lastFlipperAngle;
    bool m_flippersBound = false;
+
+   std::vector<ReplayStateField> m_stateFields;
+   std::vector<float> m_lastState;          // last recorded value per state slot
+   bool m_stateInit = false;
+   size_t m_chunkCapacity = CHUNK_SIZE;     // grown when the keyframe alone would not fit
 
    uint32_t m_lastBallSampleMs = UINT32_MAX;
 };

@@ -13,8 +13,12 @@
 ReplayRecorder::ReplayRecorder(Player *player)
    : m_player(player)
 {
-   m_cur.data.reserve(CHUNK_SIZE);
-   PLOGI << "ReplayRecorder: enabled (window " << (RING_WINDOW_MS / 1000) << "s, ball sample " << BALL_SAMPLE_INTERVAL_MS << "ms)";
+   BuildReplayStateRegistry(player, m_stateFields);
+   m_lastState.assign(m_stateFields.size(), 0.f);
+   // Every chunk starts with a keyframe holding a full state snapshot; make sure one always fits
+   m_chunkCapacity = std::max(CHUNK_SIZE, (size_t)(m_stateFields.size() * 4 + 16 * 1024));
+   m_cur.data.reserve(m_chunkCapacity);
+   PLOGI << "ReplayRecorder: enabled (window " << (RING_WINDOW_MS / 1000) << "s, ball sample " << BALL_SAMPLE_INTERVAL_MS << "ms, " << m_stateFields.size() << " state fields)";
 }
 
 ReplayRecorder::~ReplayRecorder()
@@ -69,6 +73,37 @@ void ReplayRecorder::OnPhysicsCycle()
          PutF32(pball->m_d.m_pos.y);
          PutF32(pball->m_d.m_pos.z);
          PutQuat(q);
+      }
+   }
+
+   if (m_curOpen)
+      m_cur.lastTimeMs = t;
+}
+
+void ReplayRecorder::OnFrame()
+{
+   const uint32_t t = m_player->m_time_msec;
+   std::lock_guard<std::mutex> lock(m_mutex);
+
+   if (!m_stateInit)
+   { // baseline; the first keyframe carries the full snapshot, so no diff records needed yet
+      for (size_t i = 0; i < m_stateFields.size(); i++)
+         m_lastState[i] = GetReplayStateField(m_stateFields[i]);
+      m_stateInit = true;
+      return;
+   }
+
+   for (size_t i = 0; i < m_stateFields.size(); i++)
+   {
+      const float v = GetReplayStateField(m_stateFields[i]);
+      if (v != m_lastState[i])
+      {
+         m_lastState[i] = v;
+         EnsureSpace(1 + 4 + 2 + 4, t);
+         PutU8(REC_STATE);
+         PutU32(t);
+         PutU16((uint16_t)i);
+         PutF32(v);
       }
    }
 
@@ -179,7 +214,7 @@ void ReplayRecorder::OpenChunk(uint32_t timeMs)
       m_sealed.push_back(std::move(m_cur));
       m_cur = Chunk {};
    }
-   m_cur.data.reserve(CHUNK_SIZE);
+   m_cur.data.reserve(m_chunkCapacity);
    m_cur.firstTimeMs = timeMs;
    m_cur.lastTimeMs = timeMs;
    m_curOpen = true;
@@ -189,7 +224,7 @@ void ReplayRecorder::OpenChunk(uint32_t timeMs)
 
 void ReplayRecorder::EnsureSpace(size_t bytes, uint32_t timeMs)
 {
-   if (!m_curOpen || m_cur.data.size() + bytes > CHUNK_SIZE)
+   if (!m_curOpen || m_cur.data.size() + bytes > m_chunkCapacity)
       OpenChunk(timeMs);
 }
 
@@ -219,6 +254,15 @@ void ReplayRecorder::WriteKeyframe(uint32_t timeMs)
       PutU8((uint8_t)i);
       PutF32(m_flippers[i]->m_flipperMover.m_angleCur);
    }
+   // Full state snapshot so this chunk is a valid entry point; also the diff baseline
+   PutU16((uint16_t)m_stateFields.size());
+   for (size_t i = 0; i < m_stateFields.size(); i++)
+   {
+      const float v = GetReplayStateField(m_stateFields[i]);
+      m_lastState[i] = v;
+      PutF32(v);
+   }
+   m_stateInit = true;
 }
 
 void ReplayRecorder::DropExpiredChunks(uint32_t nowMs)
@@ -238,6 +282,13 @@ uint8_t ReplayRecorder::BallId(HitBall *pHitBall)
 }
 
 void ReplayRecorder::PutU8(uint8_t v) { m_cur.data.push_back(v); }
+
+void ReplayRecorder::PutU16(uint16_t v)
+{
+   const size_t o = m_cur.data.size();
+   m_cur.data.resize(o + 2);
+   memcpy(m_cur.data.data() + o, &v, 2);
+}
 
 void ReplayRecorder::PutU32(uint32_t v)
 {

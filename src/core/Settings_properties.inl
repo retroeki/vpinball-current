@@ -1373,6 +1373,7 @@ PropBool(Standalone, EmCreditDualSend, "EM Credit Dual-Send"s, "Also deliver the
 PropBool(Standalone, ResetLogOnPlay, "Reset Log on Play"s, ""s, g_isMobile);
 PropBool(Standalone, ReplayRecord, "Record Replay"s, "Master switch for the replay system: record gameplay state (balls, flippers) into a rolling buffer for replay clips"s, false);
 PropBool(Standalone, ReplayGhost, "Replay Ghost Overlay"s, "Debug overlay: draw the previous session's recorded ball path as looping ghost markers over live play"s, false);
+PropBool(Standalone, ReplayPlayback, "Replay Playback"s, "Play back the previous session's recording instead of a live game: table loads as scenery (no script/PinMAME/physics) and recorded ball and flipper state drives the renderer"s, false);
 PropString(Standalone, VPRegPath, "VPRegPath"s, ""s, ""s);
 
 // Editor settings

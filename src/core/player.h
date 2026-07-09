@@ -178,6 +178,7 @@ public:
 
    class ReplayRecorder *m_replayRecorder = nullptr; // gameplay state recorder, only exists when Standalone/ReplayRecord is set
    class ReplayGhost *m_replayGhost = nullptr; // debug ghost playback of the previous session, only exists when Standalone/ReplayGhost is set
+   class ReplayPlayer *m_replayPlayer = nullptr; // replay playback driver, only exists when Standalone/ReplayPlayback is set; script/PinMAME/physics are disabled while it exists
 
    vector<HitBall *> m_vball;
    vector<IEditable *> m_vhitables; // all Renderable parts obtained from the table's list of Editables

@@ -14,6 +14,7 @@
 #include "plugins/VPXPlugin.h"
 #include "core/VPXPluginAPIImpl.h"
 #include "core/replay/ReplayGhost.h"
+#include "core/replay/ReplayPlayer.h"
 
 #include "imgui/imgui.h"
 #include "imgui/imgui_impl_sdl3.h"
@@ -364,6 +365,10 @@ void LiveUI::RenderUI()
    // Replay ghost debug overlay (previous session's recorded ball path)
    if (m_player->m_replayGhost)
       m_player->m_replayGhost->Draw();
+
+   // Replay playback indicator: flashing pixel "R", top-left
+   if (m_player->m_replayPlayer)
+      m_player->m_replayPlayer->DrawIndicator(m_uiScale);
 
    // Display plumb state overlay
    m_plumbOverlay.Update();
