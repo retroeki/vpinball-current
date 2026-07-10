@@ -2233,6 +2233,8 @@ void Player::OnAudioUpdated(const unsigned int msgId, void* userData, void* msgD
 {
    Player *me = static_cast<Player *>(userData);
    AudioUpdateMsg &msg = *static_cast<AudioUpdateMsg *>(msgData);
+   if (me->m_replayRecorder && msg.buffer != nullptr && msg.bufferSize != 0)
+      me->m_replayRecorder->OnRomAudio(msg); // record controller PCM (music/callouts)
    const auto &entry = me->m_audioStreams.find(msg.id.id);
    if (entry != me->m_audioStreams.end() && me->m_audioPlayer->IsOpened(entry->second))
    {

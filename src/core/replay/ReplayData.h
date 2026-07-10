@@ -40,6 +40,27 @@ public:
       uint32_t t;
       std::vector<float> values; // one per registry slot
    };
+   struct SoundEvent
+   {
+      uint32_t t;
+      float volumeOffset, randomPitch, panOffset, fadeOffset;
+      int32_t pitch, loopcount;
+      bool useSame, restart;
+      std::string name;
+   };
+   struct SoundStopEvent
+   {
+      uint32_t t;
+      std::string name;
+   };
+   struct AudioBlock
+   {
+      uint32_t t;
+      uint8_t key;
+      uint16_t rate;
+      float volume;
+      std::vector<int16_t> samples; // mono s16
+   };
 
    bool Load(const std::string &path);
 
@@ -51,6 +72,9 @@ public:
    const std::vector<StateEvent> &GetStateEvents() const { return m_stateEvents; }
    const std::vector<StateSnapshot> &GetStateSnapshots() const { return m_stateSnapshots; }
    size_t GetStateFieldCount() const { return m_stateSnapshots.empty() ? 0 : m_stateSnapshots.front().values.size(); }
+   const std::vector<SoundEvent> &GetSoundEvents() const { return m_soundEvents; }
+   const std::vector<SoundStopEvent> &GetSoundStops() const { return m_soundStops; }
+   const std::vector<AudioBlock> &GetAudioBlocks() const { return m_audioBlocks; }
 
    // A gap larger than this between consecutive samples of one ball id means the
    // ball was destroyed and later re-created with the same id: consumers must not
@@ -66,4 +90,7 @@ private:
    std::map<uint8_t, std::vector<FlipperSample>> m_flippers;
    std::vector<StateEvent> m_stateEvents;       // chronological
    std::vector<StateSnapshot> m_stateSnapshots; // one per keyframe, chronological
+   std::vector<SoundEvent> m_soundEvents;       // chronological
+   std::vector<SoundStopEvent> m_soundStops;    // chronological
+   std::vector<AudioBlock> m_audioBlocks;       // chronological
 };

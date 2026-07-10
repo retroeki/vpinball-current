@@ -15,6 +15,8 @@ ReplayPlayer::ReplayPlayer(Player *player, const std::string &path)
    if (m_loaded)
    {
       BuildReplayStateRegistry(player, m_stateFields);
+      for (VPX::Sound *const sound : player->m_ptable->m_vsound)
+         m_soundsByName[sound->GetName()] = sound;
       if (m_stateFields.size() != m_data.GetStateFieldCount())
          PLOGW << "ReplayPlayer: state registry mismatch (table has " << m_stateFields.size() << " fields, recording has " << m_data.GetStateFieldCount()
                << "), was the table modified since recording? Applying the overlap only";
@@ -30,6 +32,15 @@ ReplayPlayer::ReplayPlayer(Player *player, const std::string &path)
 ReplayPlayer::~ReplayPlayer()
 {
    // Balls created through Player::CreateBall are owned and cleaned up by the Player teardown
+   CloseAudioStreams();
+}
+
+void ReplayPlayer::CloseAudioStreams()
+{
+   if (m_player->m_audioPlayer)
+      for (auto &entry : m_audioStreams)
+         m_player->m_audioPlayer->CloseAudioStream(entry.second, false);
+   m_audioStreams.clear();
 }
 
 void ReplayPlayer::ResetLoop()
@@ -41,6 +52,10 @@ void ReplayPlayer::ResetLoop()
    m_flipperCursors.clear();
    m_stateCursor = 0;
    m_stateSnapshotApplied = false;
+   m_soundCursor = 0;
+   m_soundStopCursor = 0;
+   m_audioCursor = 0;
+   CloseAudioStreams();
 }
 
 void ReplayPlayer::ApplyStateSnapshot(const ReplayData::StateSnapshot &snapshot)
@@ -87,6 +102,45 @@ void ReplayPlayer::Update()
       if (e.slot < m_stateFields.size())
          SetReplayStateField(m_stateFields[e.slot], e.value);
       m_stateCursor++;
+   }
+
+   // Sound effects: re-fire through the live API (recorder is off during playback)
+   const auto &soundEvents = m_data.GetSoundEvents();
+   while (m_soundCursor < soundEvents.size() && soundEvents[m_soundCursor].t <= t)
+   {
+      const ReplayData::SoundEvent &e = soundEvents[m_soundCursor++];
+      if (m_player->m_PlaySound)
+      {
+         const auto it = m_soundsByName.find(e.name);
+         if (it != m_soundsByName.end())
+            m_player->m_audioPlayer->PlaySound(it->second, e.volumeOffset, e.randomPitch, e.pitch, e.panOffset, e.fadeOffset, e.loopcount, e.useSame, e.restart);
+      }
+   }
+   const auto &soundStops = m_data.GetSoundStops();
+   while (m_soundStopCursor < soundStops.size() && soundStops[m_soundStopCursor].t <= t)
+   {
+      const ReplayData::SoundStopEvent &e = soundStops[m_soundStopCursor++];
+      const auto it = m_soundsByName.find(e.name);
+      if (it != m_soundsByName.end())
+         m_player->m_audioPlayer->StopSound(it->second);
+   }
+
+   // ROM audio (music/callouts): enqueue recorded PCM with a little lookahead so
+   // the device never starves between frames
+   const auto &audioBlocks = m_data.GetAudioBlocks();
+   while (m_audioCursor < audioBlocks.size() && audioBlocks[m_audioCursor].t <= t + 200)
+   {
+      const ReplayData::AudioBlock &b = audioBlocks[m_audioCursor++];
+      auto it = m_audioStreams.find(b.key);
+      if (it == m_audioStreams.end())
+      {
+         VPX::AudioPlayer::AudioStreamID stream = m_player->m_audioPlayer->OpenAudioStream("Replay.Rom."s + std::to_string(b.key), b.rate, 1, false);
+         if (!stream)
+            continue;
+         it = m_audioStreams.emplace(b.key, stream).first;
+      }
+      m_player->m_audioPlayer->SetStreamVolume(it->second, b.volume);
+      m_player->m_audioPlayer->EnqueueStream(it->second, reinterpret_cast<uint8_t *>(const_cast<int16_t *>(b.samples.data())), (int)(b.samples.size() * 2));
    }
 
    for (const auto &entry : m_data.GetBalls())

@@ -187,6 +187,58 @@ bool ReplayData::ParseChunk(const uint8_t *p, size_t size)
          m_stateEvents.push_back({ t, slot, value });
          break;
       }
+      case ReplayRecorder::REC_SOUND:
+      {
+         if (p + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 1 + 1 > end) return false;
+         SoundEvent e;
+         e.t = GetU32(p);
+         e.volumeOffset = GetF32(p);
+         e.randomPitch = GetF32(p);
+         e.pitch = (int32_t)GetU32(p);
+         e.panOffset = GetF32(p);
+         e.fadeOffset = GetF32(p);
+         e.loopcount = (int32_t)GetU32(p);
+         const uint8_t flags = GetU8(p);
+         e.useSame = (flags & 1) != 0;
+         e.restart = (flags & 2) != 0;
+         const uint8_t nameLen = GetU8(p);
+         if (p + nameLen > end) return false;
+         e.name.assign(reinterpret_cast<const char *>(p), nameLen);
+         p += nameLen;
+         m_soundEvents.push_back(std::move(e));
+         break;
+      }
+      case ReplayRecorder::REC_SOUND_STOP:
+      {
+         if (p + 5 > end) return false;
+         SoundStopEvent e;
+         e.t = GetU32(p);
+         const uint8_t nameLen = GetU8(p);
+         if (p + nameLen > end) return false;
+         e.name.assign(reinterpret_cast<const char *>(p), nameLen);
+         p += nameLen;
+         m_soundStops.push_back(std::move(e));
+         break;
+      }
+      case ReplayRecorder::REC_ROM_AUDIO:
+      {
+         if (p + 4 + 1 + 2 + 4 + 2 > end) return false;
+         AudioBlock b;
+         b.t = GetU32(p);
+         b.key = GetU8(p);
+         memcpy(&b.rate, p, 2);
+         p += 2;
+         b.volume = GetF32(p);
+         uint16_t count;
+         memcpy(&count, p, 2);
+         p += 2;
+         if (p + (size_t)count * 2 > end) return false;
+         b.samples.resize(count);
+         memcpy(b.samples.data(), p, (size_t)count * 2);
+         p += (size_t)count * 2;
+         m_audioBlocks.push_back(std::move(b));
+         break;
+      }
       default:
          PLOGW << "ReplayData: unknown record type " << (int)type << ", stopping parse";
          return !m_balls.empty();

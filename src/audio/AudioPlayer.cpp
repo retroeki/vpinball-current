@@ -4,6 +4,7 @@
 #include "AudioPlayer.h"
 #include "AudioStreamPlayer.h"
 #include "SoundPlayer.h"
+#include "core/replay/ReplayRecorder.h"
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_audio.h>
 #ifdef __ANDROID__
@@ -838,6 +839,9 @@ bool AudioPlayer::IsMusicPlaying() const
 
 void AudioPlayer::PlaySound(Sound* sound, float volumeOffset, const float randomPitch, const int pitch, float panOffset, float frontRearFadeOffset, const int loopcount, const bool useSame, const bool restart)
 {
+   if (g_pplayer && g_pplayer->m_replayRecorder)
+      g_pplayer->m_replayRecorder->OnPlaySound(sound, volumeOffset, randomPitch, pitch, panOffset, frontRearFadeOffset, loopcount, useSame, restart);
+
    SoundPlayer* player = nullptr;
    vector<std::unique_ptr<SoundPlayer>>& players = m_soundPlayers[sound];
 
@@ -879,6 +883,9 @@ void AudioPlayer::PlaySound(Sound* sound, float volumeOffset, const float random
 
 void AudioPlayer::StopSound(Sound* sound)
 {
+   if (g_pplayer && g_pplayer->m_replayRecorder)
+      g_pplayer->m_replayRecorder->OnStopSound(sound);
+
    const vector<std::unique_ptr<SoundPlayer>>& players = m_soundPlayers[sound];
    for (const auto& player : players)
       player->Stop();

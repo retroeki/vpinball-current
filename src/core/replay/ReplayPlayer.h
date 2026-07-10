@@ -5,12 +5,15 @@
 #include <cstdint>
 #include <string>
 #include <map>
+#include <unordered_map>
 
 #include "ReplayData.h"
 #include "ReplayState.h"
+#include "audio/AudioPlayer.h"
 
 class Player;
 class HitBall;
+namespace VPX { class Sound; }
 
 // Replay playback driver (Phase 1 skeleton): loads a .vpr recording and drives
 // the real renderer with it. The table is loaded as scenery only: the script,
@@ -36,6 +39,7 @@ public:
 private:
    void ResetLoop();
    void ApplyStateSnapshot(const ReplayData::StateSnapshot &snapshot);
+   void CloseAudioStreams();
    static Matrix3 QuatToMatrix(float w, float x, float y, float z);
 
    Player *const m_player;
@@ -58,4 +62,10 @@ private:
    std::vector<ReplayStateField> m_stateFields;
    size_t m_stateCursor = 0;
    bool m_stateSnapshotApplied = false;
+
+   std::unordered_map<std::string, VPX::Sound *> m_soundsByName;
+   size_t m_soundCursor = 0;
+   size_t m_soundStopCursor = 0;
+   size_t m_audioCursor = 0;
+   std::map<uint8_t, VPX::AudioPlayer::AudioStreamID> m_audioStreams;
 };

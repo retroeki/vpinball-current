@@ -111,6 +111,96 @@ void ReplayRecorder::OnFrame()
       m_cur.lastTimeMs = t;
 }
 
+void ReplayRecorder::OnPlaySound(VPX::Sound *sound, float volumeOffset, float randomPitch, int pitch, float panOffset, float frontRearFadeOffset, int loopcount, bool useSame, bool restart)
+{
+   const uint32_t t = m_player->m_time_msec;
+   const std::string &name = sound->GetName();
+   const uint8_t nameLen = (uint8_t)std::min(name.size(), (size_t)255);
+   std::lock_guard<std::mutex> lock(m_mutex);
+   EnsureSpace(1 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 1 + 1 + nameLen, t);
+   PutU8(REC_SOUND);
+   PutU32(t);
+   PutF32(volumeOffset);
+   PutF32(randomPitch);
+   PutU32((uint32_t)pitch);
+   PutF32(panOffset);
+   PutF32(frontRearFadeOffset);
+   PutU32((uint32_t)loopcount);
+   PutU8((useSame ? 1 : 0) | (restart ? 2 : 0));
+   PutU8(nameLen);
+   for (uint8_t i = 0; i < nameLen; i++)
+      PutU8((uint8_t)name[i]);
+}
+
+void ReplayRecorder::OnStopSound(VPX::Sound *sound)
+{
+   const uint32_t t = m_player->m_time_msec;
+   const std::string &name = sound->GetName();
+   const uint8_t nameLen = (uint8_t)std::min(name.size(), (size_t)255);
+   std::lock_guard<std::mutex> lock(m_mutex);
+   EnsureSpace(1 + 4 + 1 + nameLen, t);
+   PutU8(REC_SOUND_STOP);
+   PutU32(t);
+   PutU8(nameLen);
+   for (uint8_t i = 0; i < nameLen; i++)
+      PutU8((uint8_t)name[i]);
+}
+
+void ReplayRecorder::OnRomAudio(const AudioUpdateMsg &msg)
+{
+   const uint32_t t = m_player->m_time_msec;
+   const bool isFloat = (msg.format == CTLPI_AUDIO_FORMAT_SAMPLE_FLOAT);
+   const int channels = (msg.type == CTLPI_AUDIO_SRC_BACKGLASS_MONO) ? 1 : 2;
+   const size_t bytesPerSample = isFloat ? 4 : 2;
+   const size_t nFrames = msg.bufferSize / (bytesPerSample * channels);
+   if (nFrames < 2)
+      return;
+   const uint16_t outRate = (uint16_t)std::min((double)UINT16_MAX, msg.sampleRate * 0.5);
+
+   std::lock_guard<std::mutex> lock(m_mutex);
+
+   // Downmix to mono s16 at half rate: average 2 frames x channels per output sample
+   const size_t outCount = nFrames / 2;
+   m_audioScratch.resize(outCount);
+   const float invN = 1.f / (float)(2 * channels);
+   for (size_t i = 0; i < outCount; i++)
+   {
+      float acc = 0.f;
+      for (size_t s = 0; s < 2 * (size_t)channels; s++)
+      {
+         const size_t idx = i * 2 * channels + s;
+         acc += isFloat ? reinterpret_cast<const float *>(msg.buffer)[idx] * 32767.f : (float)reinterpret_cast<const int16_t *>(msg.buffer)[idx];
+      }
+      m_audioScratch[i] = (int16_t)std::clamp(acc * invN, -32768.f, 32767.f);
+   }
+
+   uint8_t key;
+   const auto it = m_audioKeys.find(msg.id.id);
+   if (it != m_audioKeys.end())
+      key = it->second;
+   else
+   {
+      key = (uint8_t)m_audioKeys.size();
+      m_audioKeys[msg.id.id] = key;
+   }
+
+   // Split into records of at most 4096 samples
+   for (size_t off = 0; off < outCount; off += 4096)
+   {
+      const uint16_t count = (uint16_t)std::min(outCount - off, (size_t)4096);
+      EnsureSpace(1 + 4 + 1 + 2 + 4 + 2 + (size_t)count * 2, t);
+      PutU8(REC_ROM_AUDIO);
+      PutU32(t);
+      PutU8(key);
+      PutU16(outRate);
+      PutF32(msg.volume);
+      PutU16(count);
+      const size_t o = m_cur.data.size();
+      m_cur.data.resize(o + (size_t)count * 2);
+      memcpy(m_cur.data.data() + o, m_audioScratch.data() + off, (size_t)count * 2);
+   }
+}
+
 void ReplayRecorder::OnBallCreated(HitBall *pHitBall)
 {
    const uint32_t t = m_player->m_time_msec;
