@@ -61,6 +61,39 @@ public:
       float volume;
       std::vector<int16_t> samples; // mono s16
    };
+   struct DisplayDef
+   {
+      uint64_t id = 0;        // recorded CtlResId
+      uint64_t groupId = 0;
+      uint64_t overrideId = 0;
+      uint16_t width = 0, height = 0;
+      uint32_t hardware = 0;
+      uint8_t frameFormat = 0; // CTLPI_DISPLAY_FORMAT_xxx; LUM32F frames are stored quantized to 8 bit
+   };
+   struct SegDef
+   {
+      uint64_t id = 0;
+      uint64_t groupId = 0;
+      uint32_t hardware = 0;
+      uint8_t nElements = 0;
+      uint8_t elementType[32] = {}; // SegElementType
+   };
+   struct DisplayFrameEvent
+   {
+      uint32_t t;
+      uint8_t key;
+      std::vector<uint8_t> payload; // decoded (LUM8 / SRGB888 / SRGB565 per def)
+   };
+   struct SegFrameEvent
+   {
+      uint32_t t;
+      uint8_t key;
+      std::vector<uint8_t> values; // nElements*16 quantized luminances
+   };
+
+   // Byte-level run-length codec shared by recorder (encode) and parser (decode)
+   static void RleEncode(const uint8_t *src, size_t len, std::vector<uint8_t> &out);
+   static bool RleDecode(const uint8_t *src, size_t len, uint8_t *dst, size_t dstLen);
 
    bool Load(const std::string &path);
 
@@ -75,6 +108,10 @@ public:
    const std::vector<SoundEvent> &GetSoundEvents() const { return m_soundEvents; }
    const std::vector<SoundStopEvent> &GetSoundStops() const { return m_soundStops; }
    const std::vector<AudioBlock> &GetAudioBlocks() const { return m_audioBlocks; }
+   const std::map<uint8_t, DisplayDef> &GetDisplayDefs() const { return m_displayDefs; }
+   const std::map<uint8_t, SegDef> &GetSegDefs() const { return m_segDefs; }
+   const std::vector<DisplayFrameEvent> &GetDisplayFrames() const { return m_displayFrames; }
+   const std::vector<SegFrameEvent> &GetSegFrames() const { return m_segFrames; }
 
    // A gap larger than this between consecutive samples of one ball id means the
    // ball was destroyed and later re-created with the same id: consumers must not
@@ -93,4 +130,8 @@ private:
    std::vector<SoundEvent> m_soundEvents;       // chronological
    std::vector<SoundStopEvent> m_soundStops;    // chronological
    std::vector<AudioBlock> m_audioBlocks;       // chronological
+   std::map<uint8_t, DisplayDef> m_displayDefs; // defs are re-emitted per keyframe; first parse wins
+   std::map<uint8_t, SegDef> m_segDefs;
+   std::vector<DisplayFrameEvent> m_displayFrames; // chronological, RLE pre-decoded
+   std::vector<SegFrameEvent> m_segFrames;         // chronological, RLE pre-decoded
 };

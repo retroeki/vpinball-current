@@ -7,14 +7,15 @@
 #include <vector>
 #include <deque>
 #include <mutex>
+#include <atomic>
 #include <unordered_map>
 
 #include "ReplayState.h"
+#include "plugins/ControllerPlugin.h"
 
 class Player;
 class HitBall;
 class HitFlipper;
-struct AudioUpdateMsg;
 namespace VPX { class Sound; }
 
 // Records resulting gameplay state (not inputs) into a rolling in-memory buffer:
@@ -59,9 +60,9 @@ public:
    static constexpr uint32_t BALL_SAMPLE_INTERVAL_MS = 8;    // 125 Hz ball transforms
    static constexpr uint32_t RING_WINDOW_MS = 90 * 1000;     // keep the last 90 s
    static constexpr size_t CHUNK_SIZE = 64 * 1024;
-   static constexpr uint16_t FORMAT_VERSION = 2;
+   static constexpr uint16_t FORMAT_VERSION = 3;
 
-   // Record types (format v2)
+   // Record types (format v3)
    enum RecordType : uint8_t
    {
       REC_KEYFRAME = 0,     // t u32, nBalls u8 { id u8, radius f32, pos 3xf32, quat 4xi16 }, nFlippers u8 { id u8, angle f32 }, nStateFields u16, f32 x nStateFields (registry order)
@@ -73,6 +74,10 @@ public:
       REC_SOUND = 6,        // t u32, volumeOffset f32, randomPitch f32, pitch i32, panOffset f32, fadeOffset f32, loopcount i32, flags u8 (bit0 useSame, bit1 restart), nameLen u8, name bytes
       REC_SOUND_STOP = 7,   // t u32, nameLen u8, name bytes
       REC_ROM_AUDIO = 8,    // t u32, streamKey u8, rate u16, volume f32, count u16, s16 x count (mono)
+      REC_DISPLAY_DEF = 9,  // t u32, key u8, id u64, groupId u64, overrideId u64, w u16, h u16, hardware u32, frameFormat u8
+      REC_SEG_DEF = 10,     // t u32, key u8, id u64, groupId u64, hardware u32, nElements u8, elementType u8 x nElements
+      REC_DISPLAY_FRAME = 11, // t u32, key u8, flags u8 (bit0 rle), len u32, payload (LUM32F stored as LUM8; 888/565 raw)
+      REC_SEG_FRAME = 12,   // t u32, key u8, flags u8 (bit0 rle), len u16, payload (u8 luminances, nElements*16)
    };
 
 private:
@@ -89,10 +94,21 @@ private:
    void DropExpiredChunks(uint32_t nowMs);
    uint8_t BallId(HitBall *pHitBall);
 
+   // Display / segment sources (PinMAME DMD, FlexDMD, Serum overrides, alphanumeric)
+   static void OnSourcesChanged(const unsigned int msgId, void *userData, void *msgData); // any thread: only marks dirty
+   void EnumerateSources(uint32_t timeMs);   // game thread (OnFrame), under m_mutex
+   void PollDisplaySources(uint32_t timeMs); // game thread (OnFrame), under m_mutex
+   void WriteDisplayDef(uint32_t timeMs, uint8_t key, const DisplaySrcId &src);
+   void WriteSegDef(uint32_t timeMs, uint8_t key, const SegSrcId &src);
+   void WriteDisplayFrame(uint32_t timeMs, uint8_t key, const std::vector<uint8_t> &raw);
+   void WriteSegFrame(uint32_t timeMs, uint8_t key, const std::vector<uint8_t> &raw);
+   void EmitSourceDefsAndFrames(uint32_t timeMs); // after each keyframe: defs + last known payloads
+
    // append helpers into m_cur.data
    void PutU8(uint8_t v);
    void PutU16(uint16_t v);
    void PutU32(uint32_t v);
+   void PutU64(uint64_t v);
    void PutF32(float v);
    void PutQuat(const float q[4]);
    static void MatrixToQuat(const HitBall *pHitBall, float q[4]);
@@ -103,6 +119,7 @@ private:
    std::deque<Chunk> m_sealed;
    Chunk m_cur;
    bool m_curOpen = false;
+   bool m_emittingKeyframe = false;
 
    std::unordered_map<HitBall *, uint8_t> m_ballIds;
    uint8_t m_nextBallId = 0;
@@ -118,6 +135,19 @@ private:
 
    std::unordered_map<uint32_t, uint8_t> m_audioKeys; // controller audio source id -> small stream key
    std::vector<int16_t> m_audioScratch;               // downmix buffer, reused
+
+   std::atomic<bool> m_sourcesDirty { true };
+   unsigned int m_onDisplayChgId = 0, m_getDisplayId = 0, m_onSegChgId = 0, m_getSegId = 0;
+   std::vector<DisplaySrcId> m_displaySources;
+   std::vector<SegSrcId> m_segSources;
+   std::unordered_map<uint64_t, uint8_t> m_displayKeys; // source id -> key (stable across re-enumeration)
+   std::unordered_map<uint64_t, uint8_t> m_segKeys;
+   std::unordered_map<uint8_t, unsigned int> m_lastDisplayFrameId;
+   std::unordered_map<uint8_t, unsigned int> m_lastSegFrameId;
+   std::unordered_map<uint8_t, std::vector<uint8_t>> m_lastDisplayPayload; // cached raw payload for keyframe re-emission
+   std::unordered_map<uint8_t, std::vector<uint8_t>> m_lastSegPayload;
+   std::vector<uint8_t> m_frameScratch; // raw payload build buffer
+   std::vector<uint8_t> m_rleScratch;   // rle encode buffer
 
    uint32_t m_lastBallSampleMs = UINT32_MAX;
 };

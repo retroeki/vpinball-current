@@ -10,6 +10,8 @@
 #include "ReplayData.h"
 #include "ReplayState.h"
 #include "audio/AudioPlayer.h"
+#include "plugins/MsgPlugin.h"
+#include "plugins/ControllerPlugin.h"
 
 class Player;
 class HitBall;
@@ -40,7 +42,17 @@ private:
    void ResetLoop();
    void ApplyStateSnapshot(const ReplayData::StateSnapshot &snapshot);
    void CloseAudioStreams();
+   void SetupDisplayPublishing();
+   void TeardownDisplayPublishing();
    static Matrix3 QuatToMatrix(float w, float x, float y, float z);
+
+   // Plugin-bus providers: playback republishes the recorded display/segment
+   // sources so every consumer (ScoreView, DMD views, external DMD mirroring)
+   // renders them exactly as if the controller were live.
+   static void OnGetDisplaySrc(const unsigned int msgId, void *userData, void *msgData);
+   static void OnGetSegSrc(const unsigned int msgId, void *userData, void *msgData);
+   static DisplayFrame MSGPIAPI GetRenderFrameCb(const CtlResId id);
+   static SegDisplayFrame MSGPIAPI GetSegStateCb(const CtlResId id);
 
    Player *const m_player;
    ReplayData m_data;
@@ -68,4 +80,25 @@ private:
    size_t m_soundStopCursor = 0;
    size_t m_audioCursor = 0;
    std::map<uint8_t, VPX::AudioPlayer::AudioStreamID> m_audioStreams;
+
+   struct LiveDisplay
+   {
+      ReplayData::DisplayDef def;
+      std::vector<float> lumBuf;    // served when frameFormat is LUM32F
+      std::vector<uint8_t> byteBuf; // served for SRGB888/SRGB565
+      unsigned int frameId = 1;
+   };
+   struct LiveSeg
+   {
+      ReplayData::SegDef def;
+      float values[16 * 32] = {};
+      unsigned int frameId = 1;
+   };
+   std::map<uint8_t, LiveDisplay> m_liveDisplays;
+   std::map<uint8_t, LiveSeg> m_liveSegs;
+   size_t m_displayFrameCursor = 0;
+   size_t m_segFrameCursor = 0;
+   unsigned int m_getDisplayId = 0, m_onDisplayChgId = 0, m_getSegId = 0, m_onSegChgId = 0;
+   bool m_publishing = false;
+   static ReplayPlayer *s_instance;
 };

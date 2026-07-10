@@ -3,6 +3,10 @@
 #include "core/stdafx.h"
 
 #include "ReplayRecorder.h"
+#include "ReplayData.h"
+
+#include "plugins/MsgPlugin.h"
+#include "core/VPXPluginAPIImpl.h"
 
 #include <filesystem>
 #include <fstream>
@@ -18,12 +22,35 @@ ReplayRecorder::ReplayRecorder(Player *player)
    // Every chunk starts with a keyframe holding a full state snapshot; make sure one always fits
    m_chunkCapacity = std::max(CHUNK_SIZE, (size_t)(m_stateFields.size() * 4 + 16 * 1024));
    m_cur.data.reserve(m_chunkCapacity);
+
+   const MsgPluginAPI *msgApi = &MsgPI::MsgPluginManager::GetInstance().GetMsgAPI();
+   const uint32_t endpoint = VPXPluginAPIImpl::GetInstance().GetVPXEndPointId();
+   m_onDisplayChgId = msgApi->GetMsgID(CTLPI_NAMESPACE, CTLPI_DISPLAY_ON_SRC_CHG_MSG);
+   m_getDisplayId = msgApi->GetMsgID(CTLPI_NAMESPACE, CTLPI_DISPLAY_GET_SRC_MSG);
+   m_onSegChgId = msgApi->GetMsgID(CTLPI_NAMESPACE, CTLPI_SEG_ON_SRC_CHG_MSG);
+   m_getSegId = msgApi->GetMsgID(CTLPI_NAMESPACE, CTLPI_SEG_GET_SRC_MSG);
+   msgApi->SubscribeMsg(endpoint, m_onDisplayChgId, OnSourcesChanged, this);
+   msgApi->SubscribeMsg(endpoint, m_onSegChgId, OnSourcesChanged, this);
+
    PLOGI << "ReplayRecorder: enabled (window " << (RING_WINDOW_MS / 1000) << "s, ball sample " << BALL_SAMPLE_INTERVAL_MS << "ms, " << m_stateFields.size() << " state fields)";
 }
 
 ReplayRecorder::~ReplayRecorder()
 {
+   const MsgPluginAPI *msgApi = &MsgPI::MsgPluginManager::GetInstance().GetMsgAPI();
+   msgApi->UnsubscribeMsg(m_onDisplayChgId, OnSourcesChanged);
+   msgApi->UnsubscribeMsg(m_onSegChgId, OnSourcesChanged);
+   msgApi->ReleaseMsgID(m_onDisplayChgId);
+   msgApi->ReleaseMsgID(m_getDisplayId);
+   msgApi->ReleaseMsgID(m_onSegChgId);
+   msgApi->ReleaseMsgID(m_getSegId);
    PLOGI << "ReplayRecorder: shutting down, " << m_sealed.size() << " sealed chunks + current";
+}
+
+void ReplayRecorder::OnSourcesChanged(const unsigned int msgId, void *userData, void *msgData)
+{
+   // May fire on any thread (e.g. FlexDMD teardown): just flag, OnFrame re-enumerates
+   static_cast<ReplayRecorder *>(userData)->m_sourcesDirty = true;
 }
 
 void ReplayRecorder::OnPhysicsCycle()
@@ -107,8 +134,208 @@ void ReplayRecorder::OnFrame()
       }
    }
 
+   if (m_sourcesDirty.exchange(false))
+      EnumerateSources(t);
+   PollDisplaySources(t);
+
    if (m_curOpen)
       m_cur.lastTimeMs = t;
+}
+
+void ReplayRecorder::EnumerateSources(uint32_t timeMs)
+{
+   const MsgPluginAPI *msgApi = &MsgPI::MsgPluginManager::GetInstance().GetMsgAPI();
+   const uint32_t endpoint = VPXPluginAPIImpl::GetInstance().GetVPXEndPointId();
+
+   GetDisplaySrcMsg gd = { 0, 0, nullptr };
+   msgApi->BroadcastMsg(endpoint, m_getDisplayId, &gd);
+   m_displaySources.resize(gd.count);
+   if (gd.count)
+   {
+      gd = { gd.count, 0, m_displaySources.data() };
+      msgApi->BroadcastMsg(endpoint, m_getDisplayId, &gd);
+      m_displaySources.resize(std::min((size_t)gd.count, m_displaySources.size()));
+   }
+   for (const DisplaySrcId &src : m_displaySources)
+   {
+      if (m_displayKeys.find(src.id.id) == m_displayKeys.end())
+      {
+         const uint8_t key = (uint8_t)m_displayKeys.size();
+         m_displayKeys[src.id.id] = key;
+         m_lastDisplayFrameId[key] = 0xFFFFFFFFu;
+         WriteDisplayDef(timeMs, key, src);
+         PLOGI << "ReplayRecorder: display source " << (int)key << ": " << src.width << 'x' << src.height << " format " << src.frameFormat;
+      }
+   }
+
+   GetSegSrcMsg gs = { 0, 0, nullptr };
+   msgApi->BroadcastMsg(endpoint, m_getSegId, &gs);
+   m_segSources.resize(gs.count);
+   if (gs.count)
+   {
+      gs = { gs.count, 0, m_segSources.data() };
+      msgApi->BroadcastMsg(endpoint, m_getSegId, &gs);
+      m_segSources.resize(std::min((size_t)gs.count, m_segSources.size()));
+   }
+   for (const SegSrcId &src : m_segSources)
+   {
+      if (m_segKeys.find(src.id.id) == m_segKeys.end())
+      {
+         const uint8_t key = (uint8_t)m_segKeys.size();
+         m_segKeys[src.id.id] = key;
+         m_lastSegFrameId[key] = 0xFFFFFFFFu;
+         WriteSegDef(timeMs, key, src);
+         PLOGI << "ReplayRecorder: seg source " << (int)key << ": " << src.nElements << " elements";
+      }
+   }
+}
+
+void ReplayRecorder::PollDisplaySources(uint32_t timeMs)
+{
+   for (const DisplaySrcId &src : m_displaySources)
+   {
+      const auto keyIt = m_displayKeys.find(src.id.id);
+      if (keyIt == m_displayKeys.end() || src.GetRenderFrame == nullptr)
+         continue;
+      const uint8_t key = keyIt->second;
+      const DisplayFrame f = src.GetRenderFrame(src.id);
+      if (f.frame == nullptr || f.frameId == m_lastDisplayFrameId[key])
+         continue;
+      m_lastDisplayFrameId[key] = f.frameId;
+
+      const size_t nPix = (size_t)src.width * src.height;
+      if (src.frameFormat == CTLPI_DISPLAY_FORMAT_LUM32F)
+      {
+         m_frameScratch.resize(nPix);
+         const float *lum = static_cast<const float *>(f.frame);
+         for (size_t i = 0; i < nPix; i++)
+            m_frameScratch[i] = (uint8_t)(std::clamp(lum[i], 0.f, 1.f) * 255.f);
+      }
+      else if (src.frameFormat == CTLPI_DISPLAY_FORMAT_SRGB888)
+      {
+         m_frameScratch.resize(nPix * 3);
+         memcpy(m_frameScratch.data(), f.frame, nPix * 3);
+      }
+      else if (src.frameFormat == CTLPI_DISPLAY_FORMAT_SRGB565)
+      {
+         m_frameScratch.resize(nPix * 2);
+         memcpy(m_frameScratch.data(), f.frame, nPix * 2);
+      }
+      else
+         continue;
+
+      m_lastDisplayPayload[key] = m_frameScratch;
+      WriteDisplayFrame(timeMs, key, m_frameScratch);
+   }
+
+   for (const SegSrcId &src : m_segSources)
+   {
+      const auto keyIt = m_segKeys.find(src.id.id);
+      if (keyIt == m_segKeys.end() || src.GetState == nullptr)
+         continue;
+      const uint8_t key = keyIt->second;
+      const SegDisplayFrame f = src.GetState(src.id);
+      if (f.frame == nullptr || f.frameId == m_lastSegFrameId[key])
+         continue;
+      m_lastSegFrameId[key] = f.frameId;
+
+      const size_t n = (size_t)std::min(src.nElements, (unsigned int)CTLPI_SEG_MAX_DISP_ELEMENTS) * 16;
+      m_frameScratch.resize(n);
+      for (size_t i = 0; i < n; i++)
+         m_frameScratch[i] = (uint8_t)(std::clamp(f.frame[i], 0.f, 1.f) * 255.f);
+
+      m_lastSegPayload[key] = m_frameScratch;
+      WriteSegFrame(timeMs, key, m_frameScratch);
+   }
+}
+
+void ReplayRecorder::WriteDisplayDef(uint32_t timeMs, uint8_t key, const DisplaySrcId &src)
+{
+   EnsureSpace(1 + 4 + 1 + 8 + 8 + 8 + 2 + 2 + 4 + 1, timeMs);
+   PutU8(REC_DISPLAY_DEF);
+   PutU32(timeMs);
+   PutU8(key);
+   PutU64(src.id.id);
+   PutU64(src.groupId.id);
+   PutU64(src.overrideId.id);
+   PutU16((uint16_t)src.width);
+   PutU16((uint16_t)src.height);
+   PutU32(src.hardware);
+   PutU8((uint8_t)src.frameFormat);
+}
+
+void ReplayRecorder::WriteSegDef(uint32_t timeMs, uint8_t key, const SegSrcId &src)
+{
+   const uint8_t n = (uint8_t)std::min(src.nElements, (unsigned int)CTLPI_SEG_MAX_DISP_ELEMENTS);
+   EnsureSpace(1 + 4 + 1 + 8 + 8 + 4 + 1 + n, timeMs);
+   PutU8(REC_SEG_DEF);
+   PutU32(timeMs);
+   PutU8(key);
+   PutU64(src.id.id);
+   PutU64(src.groupId.id);
+   PutU32(src.hardware);
+   PutU8(n);
+   for (uint8_t i = 0; i < n; i++)
+      PutU8((uint8_t)src.elementType[i]);
+}
+
+void ReplayRecorder::WriteDisplayFrame(uint32_t timeMs, uint8_t key, const std::vector<uint8_t> &raw)
+{
+   ReplayData::RleEncode(raw.data(), raw.size(), m_rleScratch);
+   const bool rle = m_rleScratch.size() < raw.size();
+   const std::vector<uint8_t> &payload = rle ? m_rleScratch : raw;
+   EnsureSpace(1 + 4 + 1 + 1 + 4 + payload.size(), timeMs);
+   PutU8(REC_DISPLAY_FRAME);
+   PutU32(timeMs);
+   PutU8(key);
+   PutU8(rle ? 1 : 0);
+   PutU32((uint32_t)payload.size());
+   const size_t o = m_cur.data.size();
+   m_cur.data.resize(o + payload.size());
+   memcpy(m_cur.data.data() + o, payload.data(), payload.size());
+}
+
+void ReplayRecorder::WriteSegFrame(uint32_t timeMs, uint8_t key, const std::vector<uint8_t> &raw)
+{
+   ReplayData::RleEncode(raw.data(), raw.size(), m_rleScratch);
+   const bool rle = m_rleScratch.size() < raw.size();
+   const std::vector<uint8_t> &payload = rle ? m_rleScratch : raw;
+   EnsureSpace(1 + 4 + 1 + 1 + 2 + payload.size(), timeMs);
+   PutU8(REC_SEG_FRAME);
+   PutU32(timeMs);
+   PutU8(key);
+   PutU8(rle ? 1 : 0);
+   PutU16((uint16_t)payload.size());
+   const size_t o = m_cur.data.size();
+   m_cur.data.resize(o + payload.size());
+   memcpy(m_cur.data.data() + o, payload.data(), payload.size());
+}
+
+void ReplayRecorder::EmitSourceDefsAndFrames(uint32_t timeMs)
+{
+   // Called right after a fresh chunk's keyframe: re-emit defs and the latest
+   // payloads so playback can enter at any retained chunk. The chunk was just
+   // opened, so appends here intentionally skip EnsureSpace (no reentrancy).
+   for (const DisplaySrcId &src : m_displaySources)
+   {
+      const auto keyIt = m_displayKeys.find(src.id.id);
+      if (keyIt == m_displayKeys.end())
+         continue;
+      WriteDisplayDef(timeMs, keyIt->second, src);
+      const auto payload = m_lastDisplayPayload.find(keyIt->second);
+      if (payload != m_lastDisplayPayload.end() && !payload->second.empty())
+         WriteDisplayFrame(timeMs, keyIt->second, payload->second);
+   }
+   for (const SegSrcId &src : m_segSources)
+   {
+      const auto keyIt = m_segKeys.find(src.id.id);
+      if (keyIt == m_segKeys.end())
+         continue;
+      WriteSegDef(timeMs, keyIt->second, src);
+      const auto payload = m_lastSegPayload.find(keyIt->second);
+      if (payload != m_lastSegPayload.end() && !payload->second.empty())
+         WriteSegFrame(timeMs, keyIt->second, payload->second);
+   }
 }
 
 void ReplayRecorder::OnPlaySound(VPX::Sound *sound, float volumeOffset, float randomPitch, int pitch, float panOffset, float frontRearFadeOffset, int loopcount, bool useSame, bool restart)
@@ -309,11 +536,18 @@ void ReplayRecorder::OpenChunk(uint32_t timeMs)
    m_cur.lastTimeMs = timeMs;
    m_curOpen = true;
    DropExpiredChunks(timeMs);
+   m_emittingKeyframe = true; // EnsureSpace must not re-open the chunk we are seeding
    WriteKeyframe(timeMs);
+   EmitSourceDefsAndFrames(timeMs);
+   m_emittingKeyframe = false;
 }
 
 void ReplayRecorder::EnsureSpace(size_t bytes, uint32_t timeMs)
 {
+   if (m_emittingKeyframe)
+      return; // fresh chunk being seeded; the vector grows as needed
+   if (bytes + 4096 > m_chunkCapacity)
+      m_chunkCapacity = bytes + 16 * 1024; // single oversized record (e.g. big RGB display frame)
    if (!m_curOpen || m_cur.data.size() + bytes > m_chunkCapacity)
       OpenChunk(timeMs);
 }
@@ -378,6 +612,13 @@ void ReplayRecorder::PutU16(uint16_t v)
    const size_t o = m_cur.data.size();
    m_cur.data.resize(o + 2);
    memcpy(m_cur.data.data() + o, &v, 2);
+}
+
+void ReplayRecorder::PutU64(uint64_t v)
+{
+   const size_t o = m_cur.data.size();
+   m_cur.data.resize(o + 8);
+   memcpy(m_cur.data.data() + o, &v, 8);
 }
 
 void ReplayRecorder::PutU32(uint32_t v)

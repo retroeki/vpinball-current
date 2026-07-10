@@ -25,6 +25,20 @@ namespace
       p += 4;
       return v;
    }
+   uint64_t GetU64(const uint8_t *&p)
+   {
+      uint64_t v;
+      memcpy(&v, p, 8);
+      p += 8;
+      return v;
+   }
+   uint16_t GetU16(const uint8_t *&p)
+   {
+      uint16_t v;
+      memcpy(&v, p, 2);
+      p += 2;
+      return v;
+   }
    void GetQuat(const uint8_t *&p, float q[4])
    {
       for (int i = 0; i < 4; i++)
@@ -35,6 +49,35 @@ namespace
          q[i] = (float)s * (1.f / 32767.f);
       }
    }
+}
+
+void ReplayData::RleEncode(const uint8_t *src, size_t len, std::vector<uint8_t> &out)
+{
+   out.clear();
+   size_t i = 0;
+   while (i < len)
+   {
+      uint8_t run = 1;
+      while (run < 255 && i + run < len && src[i + run] == src[i])
+         run++;
+      out.push_back(run);
+      out.push_back(src[i]);
+      i += run;
+   }
+}
+
+bool ReplayData::RleDecode(const uint8_t *src, size_t len, uint8_t *dst, size_t dstLen)
+{
+   size_t o = 0;
+   for (size_t i = 0; i + 1 < len; i += 2)
+   {
+      const uint8_t run = src[i];
+      if (o + run > dstLen)
+         return false;
+      memset(dst + o, src[i + 1], run);
+      o += run;
+   }
+   return o == dstLen;
 }
 
 bool ReplayData::Load(const std::string &path)
@@ -237,6 +280,97 @@ bool ReplayData::ParseChunk(const uint8_t *p, size_t size)
          memcpy(b.samples.data(), p, (size_t)count * 2);
          p += (size_t)count * 2;
          m_audioBlocks.push_back(std::move(b));
+         break;
+      }
+      case ReplayRecorder::REC_DISPLAY_DEF:
+      {
+         if (p + 4 + 1 + 8 + 8 + 8 + 2 + 2 + 4 + 1 > end) return false;
+         GetU32(p); // t, defs are time-independent
+         const uint8_t key = GetU8(p);
+         DisplayDef def;
+         def.id = GetU64(p);
+         def.groupId = GetU64(p);
+         def.overrideId = GetU64(p);
+         def.width = GetU16(p);
+         def.height = GetU16(p);
+         def.hardware = GetU32(p);
+         def.frameFormat = GetU8(p);
+         m_displayDefs.emplace(key, def); // re-emitted per keyframe, first parse wins
+         break;
+      }
+      case ReplayRecorder::REC_SEG_DEF:
+      {
+         if (p + 4 + 1 + 8 + 8 + 4 + 1 > end) return false;
+         GetU32(p);
+         const uint8_t key = GetU8(p);
+         SegDef def;
+         def.id = GetU64(p);
+         def.groupId = GetU64(p);
+         def.hardware = GetU32(p);
+         def.nElements = GetU8(p);
+         if (def.nElements > 32 || p + def.nElements > end) return false;
+         for (uint8_t i = 0; i < def.nElements; i++)
+            def.elementType[i] = GetU8(p);
+         m_segDefs.emplace(key, def);
+         break;
+      }
+      case ReplayRecorder::REC_DISPLAY_FRAME:
+      {
+         if (p + 4 + 1 + 1 + 4 > end) return false;
+         DisplayFrameEvent e;
+         e.t = GetU32(p);
+         e.key = GetU8(p);
+         const uint8_t flags = GetU8(p);
+         const uint32_t len = GetU32(p);
+         if (p + len > end) return false;
+         const auto def = m_displayDefs.find(e.key);
+         if (def == m_displayDefs.end())
+            return false; // frame before def: recorder always emits defs first
+         const size_t bpp = def->second.frameFormat == 2 /*SRGB888*/ ? 3 : def->second.frameFormat == 3 /*SRGB565*/ ? 2 : 1;
+         const size_t rawLen = (size_t)def->second.width * def->second.height * bpp;
+         e.payload.resize(rawLen);
+         if (flags & 1)
+         {
+            if (!RleDecode(p, len, e.payload.data(), rawLen))
+               return false;
+         }
+         else
+         {
+            if (len != rawLen)
+               return false;
+            memcpy(e.payload.data(), p, rawLen);
+         }
+         p += len;
+         m_displayFrames.push_back(std::move(e));
+         break;
+      }
+      case ReplayRecorder::REC_SEG_FRAME:
+      {
+         if (p + 4 + 1 + 1 + 2 > end) return false;
+         SegFrameEvent e;
+         e.t = GetU32(p);
+         e.key = GetU8(p);
+         const uint8_t flags = GetU8(p);
+         const uint16_t len = GetU16(p);
+         if (p + len > end) return false;
+         const auto def = m_segDefs.find(e.key);
+         if (def == m_segDefs.end())
+            return false;
+         const size_t rawLen = (size_t)def->second.nElements * 16;
+         e.values.resize(rawLen);
+         if (flags & 1)
+         {
+            if (!RleDecode(p, len, e.values.data(), rawLen))
+               return false;
+         }
+         else
+         {
+            if (len != rawLen)
+               return false;
+            memcpy(e.values.data(), p, rawLen);
+         }
+         p += len;
+         m_segFrames.push_back(std::move(e));
          break;
       }
       default:

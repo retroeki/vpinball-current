@@ -4,9 +4,13 @@
 
 #include "ReplayPlayer.h"
 
+#include "core/VPXPluginAPIImpl.h"
+
 #include "imgui/imgui.h"
 
 #include <cmath>
+
+ReplayPlayer *ReplayPlayer::s_instance = nullptr;
 
 ReplayPlayer::ReplayPlayer(Player *player, const std::string &path)
    : m_player(player)
@@ -20,8 +24,31 @@ ReplayPlayer::ReplayPlayer(Player *player, const std::string &path)
       if (m_stateFields.size() != m_data.GetStateFieldCount())
          PLOGW << "ReplayPlayer: state registry mismatch (table has " << m_stateFields.size() << " fields, recording has " << m_data.GetStateFieldCount()
                << "), was the table modified since recording? Applying the overlap only";
+
+      // Build the live display/segment buffers and publish them on the plugin bus
+      for (const auto &entry : m_data.GetDisplayDefs())
+      {
+         LiveDisplay d;
+         d.def = entry.second;
+         const size_t nPix = (size_t)d.def.width * d.def.height;
+         if (d.def.frameFormat == CTLPI_DISPLAY_FORMAT_LUM32F)
+            d.lumBuf.assign(nPix, 0.f);
+         else
+            d.byteBuf.assign(nPix * (d.def.frameFormat == CTLPI_DISPLAY_FORMAT_SRGB888 ? 3 : 2), 0);
+         m_liveDisplays.emplace(entry.first, std::move(d));
+      }
+      for (const auto &entry : m_data.GetSegDefs())
+      {
+         LiveSeg s;
+         s.def = entry.second;
+         m_liveSegs.emplace(entry.first, std::move(s));
+      }
+      s_instance = this;
+      SetupDisplayPublishing();
+
       PLOGI << "ReplayPlayer: playback of " << path << " (" << m_data.GetBalls().size() << " balls, " << m_data.GetFlippers().size() << " flippers, "
-            << m_data.GetStateEvents().size() << " state events, " << m_data.GetDurationMs() << "ms loop)";
+            << m_data.GetStateEvents().size() << " state events, " << m_liveDisplays.size() << " displays, " << m_liveSegs.size() << " seg displays, "
+            << m_data.GetDurationMs() << "ms loop)";
    }
    else
    {
@@ -32,7 +59,115 @@ ReplayPlayer::ReplayPlayer(Player *player, const std::string &path)
 ReplayPlayer::~ReplayPlayer()
 {
    // Balls created through Player::CreateBall are owned and cleaned up by the Player teardown
+   TeardownDisplayPublishing();
+   if (s_instance == this)
+      s_instance = nullptr;
    CloseAudioStreams();
+}
+
+void ReplayPlayer::SetupDisplayPublishing()
+{
+   if (m_liveDisplays.empty() && m_liveSegs.empty())
+      return;
+   const MsgPluginAPI *msgApi = &MsgPI::MsgPluginManager::GetInstance().GetMsgAPI();
+   const uint32_t endpoint = VPXPluginAPIImpl::GetInstance().GetVPXEndPointId();
+   m_getDisplayId = msgApi->GetMsgID(CTLPI_NAMESPACE, CTLPI_DISPLAY_GET_SRC_MSG);
+   m_onDisplayChgId = msgApi->GetMsgID(CTLPI_NAMESPACE, CTLPI_DISPLAY_ON_SRC_CHG_MSG);
+   m_getSegId = msgApi->GetMsgID(CTLPI_NAMESPACE, CTLPI_SEG_GET_SRC_MSG);
+   m_onSegChgId = msgApi->GetMsgID(CTLPI_NAMESPACE, CTLPI_SEG_ON_SRC_CHG_MSG);
+   msgApi->SubscribeMsg(endpoint, m_getDisplayId, OnGetDisplaySrc, this);
+   msgApi->SubscribeMsg(endpoint, m_getSegId, OnGetSegSrc, this);
+   m_publishing = true;
+   // Announce our sources so consumers (ScoreView, DMD views, mirroring) re-enumerate
+   msgApi->BroadcastMsg(endpoint, m_onDisplayChgId, nullptr);
+   msgApi->BroadcastMsg(endpoint, m_onSegChgId, nullptr);
+}
+
+void ReplayPlayer::TeardownDisplayPublishing()
+{
+   if (!m_publishing)
+      return;
+   m_publishing = false;
+   const MsgPluginAPI *msgApi = &MsgPI::MsgPluginManager::GetInstance().GetMsgAPI();
+   const uint32_t endpoint = VPXPluginAPIImpl::GetInstance().GetVPXEndPointId();
+   msgApi->UnsubscribeMsg(m_getDisplayId, OnGetDisplaySrc);
+   msgApi->UnsubscribeMsg(m_getSegId, OnGetSegSrc);
+   msgApi->BroadcastMsg(endpoint, m_onDisplayChgId, nullptr);
+   msgApi->BroadcastMsg(endpoint, m_onSegChgId, nullptr);
+   msgApi->ReleaseMsgID(m_getDisplayId);
+   msgApi->ReleaseMsgID(m_onDisplayChgId);
+   msgApi->ReleaseMsgID(m_getSegId);
+   msgApi->ReleaseMsgID(m_onSegChgId);
+}
+
+void ReplayPlayer::OnGetDisplaySrc(const unsigned int msgId, void *userData, void *msgData)
+{
+   ReplayPlayer *const me = static_cast<ReplayPlayer *>(userData);
+   GetDisplaySrcMsg &msg = *static_cast<GetDisplaySrcMsg *>(msgData);
+   for (const auto &entry : me->m_liveDisplays)
+   {
+      if (msg.count < msg.maxEntryCount)
+      {
+         DisplaySrcId src = {};
+         src.id.id = entry.second.def.id;
+         src.groupId.id = entry.second.def.groupId;
+         src.overrideId.id = entry.second.def.overrideId;
+         src.width = entry.second.def.width;
+         src.height = entry.second.def.height;
+         src.hardware = entry.second.def.hardware;
+         src.frameFormat = entry.second.def.frameFormat;
+         src.GetRenderFrame = &GetRenderFrameCb;
+         src.identifyFormat = 0;
+         src.GetIdentifyFrame = nullptr;
+         msg.entries[msg.count] = src;
+      }
+      msg.count++;
+   }
+}
+
+void ReplayPlayer::OnGetSegSrc(const unsigned int msgId, void *userData, void *msgData)
+{
+   ReplayPlayer *const me = static_cast<ReplayPlayer *>(userData);
+   GetSegSrcMsg &msg = *static_cast<GetSegSrcMsg *>(msgData);
+   for (const auto &entry : me->m_liveSegs)
+   {
+      if (msg.count < msg.maxEntryCount)
+      {
+         SegSrcId src = {};
+         src.id.id = entry.second.def.id;
+         src.groupId.id = entry.second.def.groupId;
+         src.hardware = entry.second.def.hardware;
+         src.nElements = entry.second.def.nElements;
+         for (uint8_t i = 0; i < entry.second.def.nElements; i++)
+            src.elementType[i] = (SegElementType)entry.second.def.elementType[i];
+         src.GetState = &GetSegStateCb;
+         msg.entries[msg.count] = src;
+      }
+      msg.count++;
+   }
+}
+
+DisplayFrame MSGPIAPI ReplayPlayer::GetRenderFrameCb(const CtlResId id)
+{
+   ReplayPlayer *const me = s_instance;
+   if (me)
+      for (auto &entry : me->m_liveDisplays)
+         if (entry.second.def.id == id.id)
+            return { entry.second.frameId,
+               entry.second.def.frameFormat == CTLPI_DISPLAY_FORMAT_LUM32F ? static_cast<const void *>(entry.second.lumBuf.data()) : static_cast<const void *>(entry.second.byteBuf.data()) };
+   static const float s_empty[16 * 16] = {};
+   return { 0, s_empty };
+}
+
+SegDisplayFrame MSGPIAPI ReplayPlayer::GetSegStateCb(const CtlResId id)
+{
+   ReplayPlayer *const me = s_instance;
+   if (me)
+      for (auto &entry : me->m_liveSegs)
+         if (entry.second.def.id == id.id)
+            return { entry.second.frameId, entry.second.values };
+   static const float s_empty[16 * 32] = {};
+   return { 0, s_empty };
 }
 
 void ReplayPlayer::CloseAudioStreams()
@@ -55,6 +190,8 @@ void ReplayPlayer::ResetLoop()
    m_soundCursor = 0;
    m_soundStopCursor = 0;
    m_audioCursor = 0;
+   m_displayFrameCursor = 0;
+   m_segFrameCursor = 0;
    CloseAudioStreams();
 }
 
@@ -123,6 +260,44 @@ void ReplayPlayer::Update()
       const auto it = m_soundsByName.find(e.name);
       if (it != m_soundsByName.end())
          m_player->m_audioPlayer->StopSound(it->second);
+   }
+
+   // Display frames (DMD, FlexDMD, colorized overrides): copy into the live
+   // buffers our published sources serve to consumers
+   const auto &dispFrames = m_data.GetDisplayFrames();
+   while (m_displayFrameCursor < dispFrames.size() && dispFrames[m_displayFrameCursor].t <= t)
+   {
+      const ReplayData::DisplayFrameEvent &e = dispFrames[m_displayFrameCursor++];
+      const auto it = m_liveDisplays.find(e.key);
+      if (it != m_liveDisplays.end())
+      {
+         LiveDisplay &d = it->second;
+         if (d.def.frameFormat == CTLPI_DISPLAY_FORMAT_LUM32F)
+         {
+            const size_t n = std::min(d.lumBuf.size(), e.payload.size());
+            for (size_t i = 0; i < n; i++)
+               d.lumBuf[i] = (float)e.payload[i] * (1.f / 255.f);
+         }
+         else
+            memcpy(d.byteBuf.data(), e.payload.data(), std::min(d.byteBuf.size(), e.payload.size()));
+         d.frameId++;
+      }
+   }
+
+   // Segment display frames (alphanumeric/EM score displays)
+   const auto &segFrames = m_data.GetSegFrames();
+   while (m_segFrameCursor < segFrames.size() && segFrames[m_segFrameCursor].t <= t)
+   {
+      const ReplayData::SegFrameEvent &e = segFrames[m_segFrameCursor++];
+      const auto it = m_liveSegs.find(e.key);
+      if (it != m_liveSegs.end())
+      {
+         LiveSeg &s = it->second;
+         const size_t n = std::min((size_t)16 * 32, e.values.size());
+         for (size_t i = 0; i < n; i++)
+            s.values[i] = (float)e.values[i] * (1.f / 255.f);
+         s.frameId++;
+      }
    }
 
    // ROM audio (music/callouts): enqueue recorded PCM with a little lookahead so
