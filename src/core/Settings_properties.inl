@@ -1375,6 +1375,7 @@ PropBool(Standalone, ReplayRecord, "Record Replay"s, "Master switch for the repl
 PropBool(Standalone, ReplayGhost, "Replay Ghost Overlay"s, "Debug overlay: draw the previous session's recorded ball path as looping ghost markers over live play"s, false);
 PropBool(Standalone, ReplayPlayback, "Replay Playback"s, "Play back the previous session's recording instead of a live game: table loads as scenery (no script/PinMAME/physics) and recorded ball and flipper state drives the renderer"s, false);
 PropBool(Standalone, ReplayExportMode, "Replay Export Mode"s, "Replay playback runs the configured window exactly once at a fixed frame step (unclocked, for video export) and then stops the session"s, false);
+PropString(Standalone, ReplayFile, "Replay File"s, "File name inside <pref>/replays that Watch/Ghost/Export plays back"s, "last-session.vpr"s);
 PropIntUnbounded(Standalone, ReplayExportStartMs, "Replay Export Start"s, "Export window start in ms relative to the start of the recording (0 = from the beginning)"s, 0);
 PropIntUnbounded(Standalone, ReplayExportLenMs, "Replay Export Length"s, "Export window length in ms (0 = to the end of the recording)"s, 0);
 PropIntUnbounded(Standalone, ReplayExportFps, "Replay Export FPS"s, "Fixed frame step rate for replay export mode"s, 60);

@@ -424,9 +424,10 @@ Player::Player(PinTable *const table, const int playMode)
    const float slope = lerp(minSlope, maxSlope, m_ptable->m_globalDifficulty);
    m_physics->SetGravity(slope, m_ptable->m_overridePhysics ? m_ptable->m_fOverrideGravityConstant : m_ptable->m_Gravity);
 
+   const string replayFile = g_pvp->GetPrefPath() + "replays" + PATH_SEPARATOR_CHAR + m_ptable->m_settings.GetStandalone_ReplayFile();
    if (!IsEditorMode() && m_ptable->m_settings.GetStandalone_ReplayPlayback())
    {
-      m_replayPlayer = new ReplayPlayer(this, g_pvp->GetPrefPath() + "replays" + PATH_SEPARATOR_CHAR + "last-session.vpr");
+      m_replayPlayer = new ReplayPlayer(this, replayFile);
       if (!m_replayPlayer->IsLoaded())
       { // fall back to a normal live game when there is no recording to play
          delete m_replayPlayer;
@@ -439,7 +440,7 @@ Player::Player(PinTable *const table, const int playMode)
       m_replayRecorder = new ReplayRecorder(this);
 
    if (!IsEditorMode() && m_replayPlayer == nullptr && m_ptable->m_settings.GetStandalone_ReplayGhost())
-      m_replayGhost = new ReplayGhost(this, g_pvp->GetPrefPath() + "replays" + PATH_SEPARATOR_CHAR + "last-session.vpr");
+      m_replayGhost = new ReplayGhost(this, replayFile);
 
    InitFPS();
 
