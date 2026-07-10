@@ -14,14 +14,47 @@
 #include <cfloat>
 #include <cmath>
 
-ReplayRecorder::ReplayRecorder(Player *player)
+ReplayRecorder::ReplayRecorder(Player *player, const string &finalPath)
    : m_player(player)
+   , m_finalPath(finalPath)
+   , m_tmpPath(finalPath + ".tmp")
 {
    BuildReplayStateRegistry(player, m_stateFields);
    m_lastState.assign(m_stateFields.size(), 0.f);
    // Every chunk starts with a keyframe holding a full state snapshot; make sure one always fits
    m_chunkCapacity = std::max(CHUNK_SIZE, (size_t)(m_stateFields.size() * 4 + 16 * 1024));
    m_cur.data.reserve(m_chunkCapacity);
+
+   // Open the session temp file up front with a placeholder header; sealed
+   // chunks stream into it as play proceeds. Finalize patches the header and
+   // renames over m_finalPath, so a crash mid-session leaves only a .tmp whose
+   // zeroed header fails validation.
+   try
+   {
+      std::filesystem::create_directories(std::filesystem::path(m_finalPath).parent_path());
+   }
+   catch (const std::exception &e)
+   {
+      PLOGE << "ReplayRecorder: failed to create directory for " << m_finalPath << ": " << e.what();
+   }
+   m_file.open(m_tmpPath, std::ios::binary | std::ios::in | std::ios::out | std::ios::trunc);
+   if (m_file.is_open())
+   {
+      const uint16_t version = FORMAT_VERSION;
+      const uint16_t flags = 0; // bit 0 reserved for compression (Phase 1)
+      const uint32_t zero = 0;
+      m_file.write("VPRP", 4);
+      m_file.write(reinterpret_cast<const char *>(&version), 2);
+      m_file.write(reinterpret_cast<const char *>(&flags), 2);
+      m_file.write(reinterpret_cast<const char *>(&zero), 4); // firstMs, patched at finalize
+      m_file.write(reinterpret_cast<const char *>(&zero), 4); // lastMs
+      m_file.write(reinterpret_cast<const char *>(&zero), 4); // chunkCount
+      m_fileOk = !m_file.fail();
+   }
+   if (m_fileOk)
+      m_writerThread = std::thread(&ReplayRecorder::WriterLoop, this);
+   else
+      PLOGE << "ReplayRecorder: failed to open " << m_tmpPath << ", session will not be recorded";
 
    const MsgPluginAPI *msgApi = &MsgPI::MsgPluginManager::GetInstance().GetMsgAPI();
    const uint32_t endpoint = VPXPluginAPIImpl::GetInstance().GetVPXEndPointId();
@@ -32,7 +65,7 @@ ReplayRecorder::ReplayRecorder(Player *player)
    msgApi->SubscribeMsg(endpoint, m_onDisplayChgId, OnSourcesChanged, this);
    msgApi->SubscribeMsg(endpoint, m_onSegChgId, OnSourcesChanged, this);
 
-   PLOGI << "ReplayRecorder: enabled (window " << (RING_WINDOW_MS / 1000) << "s, ball sample " << BALL_SAMPLE_INTERVAL_MS << "ms, " << m_stateFields.size() << " state fields)";
+   PLOGI << "ReplayRecorder: enabled (full session -> " << m_tmpPath << ", ball sample " << BALL_SAMPLE_INTERVAL_MS << "ms, " << m_stateFields.size() << " state fields)";
 }
 
 ReplayRecorder::~ReplayRecorder()
@@ -44,7 +77,108 @@ ReplayRecorder::~ReplayRecorder()
    msgApi->ReleaseMsgID(m_getDisplayId);
    msgApi->ReleaseMsgID(m_onSegChgId);
    msgApi->ReleaseMsgID(m_getSegId);
-   PLOGI << "ReplayRecorder: shutting down, " << m_sealed.size() << " sealed chunks + current";
+
+   // Seal the open chunk, drain the writer, finalize the file. Player nulls its
+   // pointer before deleting, so no new records arrive past this point.
+   {
+      std::lock_guard<std::mutex> lock(m_mutex);
+      if (m_curOpen && !m_cur.data.empty())
+      {
+         std::lock_guard<std::mutex> ql(m_queueMutex);
+         m_queue.push_back(std::move(m_cur));
+      }
+      m_curOpen = false;
+   }
+   {
+      std::lock_guard<std::mutex> ql(m_queueMutex);
+      m_writerStop = true;
+   }
+   m_queueCv.notify_one();
+   if (m_writerThread.joinable())
+      m_writerThread.join();
+   FinalizeFile();
+}
+
+void ReplayRecorder::WriterLoop()
+{
+   SetThreadName("ReplayWriter"s);
+   for (;;)
+   {
+      Chunk c;
+      {
+         std::unique_lock<std::mutex> lock(m_queueMutex);
+         m_queueCv.wait(lock, [this] { return m_writerStop || !m_queue.empty(); });
+         if (m_queue.empty())
+            return; // only reachable when stopping with a drained queue
+         c = std::move(m_queue.front());
+         m_queue.pop_front();
+      }
+      AppendChunkToFile(c);
+   }
+}
+
+void ReplayRecorder::AppendChunkToFile(const Chunk &c)
+{
+   if (!m_fileOk)
+      return;
+   const uint32_t size = (uint32_t)c.data.size();
+   if (m_bytesWritten + 8 + size > MAX_SESSION_BYTES)
+   {
+      if (!m_capWarned)
+      {
+         m_capWarned = true;
+         PLOGW << "ReplayRecorder: session cap of " << (MAX_SESSION_BYTES >> 20) << " MB reached, recording truncated";
+      }
+      return;
+   }
+   m_file.write(reinterpret_cast<const char *>(&c.firstTimeMs), 4);
+   m_file.write(reinterpret_cast<const char *>(&size), 4);
+   m_file.write(reinterpret_cast<const char *>(c.data.data()), size);
+   if (m_file.fail())
+   {
+      PLOGE << "ReplayRecorder: write to " << m_tmpPath << " failed (disk full?), session dropped";
+      m_fileOk = false;
+      return;
+   }
+   if (m_chunkCount == 0)
+      m_firstMs = c.firstTimeMs;
+   m_lastMs = c.lastTimeMs;
+   m_chunkCount++;
+   m_bytesWritten += 8 + size;
+}
+
+void ReplayRecorder::FinalizeFile()
+{
+   if (!m_fileOk || m_chunkCount == 0)
+   {
+      m_file.close();
+      std::error_code ec;
+      std::filesystem::remove(m_tmpPath, ec);
+      PLOGI << "ReplayRecorder: nothing recorded (or write failed), keeping previous " << m_finalPath;
+      return;
+   }
+   m_file.seekp(8);
+   m_file.write(reinterpret_cast<const char *>(&m_firstMs), 4);
+   m_file.write(reinterpret_cast<const char *>(&m_lastMs), 4);
+   m_file.write(reinterpret_cast<const char *>(&m_chunkCount), 4);
+   m_file.flush();
+   const bool ok = !m_file.fail();
+   m_file.close();
+   std::error_code ec;
+   if (!ok)
+   {
+      std::filesystem::remove(m_tmpPath, ec);
+      PLOGE << "ReplayRecorder: header finalize failed, session dropped";
+      return;
+   }
+   std::filesystem::rename(m_tmpPath, m_finalPath, ec); // atomically replaces the previous session
+   if (ec)
+   {
+      PLOGE << "ReplayRecorder: rename to " << m_finalPath << " failed: " << ec.message();
+      std::filesystem::remove(m_tmpPath, ec);
+      return;
+   }
+   PLOGI << "ReplayRecorder: session recording " << m_finalPath << " (" << m_bytesWritten << " bytes, " << m_chunkCount << " chunks, " << (m_lastMs - m_firstMs) << "ms)";
 }
 
 void ReplayRecorder::OnSourcesChanged(const unsigned int msgId, void *userData, void *msgData)
@@ -457,85 +591,22 @@ void ReplayRecorder::OnBallDestroyed(HitBall *pHitBall)
    m_ballIds.erase(it);
 }
 
-bool ReplayRecorder::SaveToFile(const std::string &path)
-{
-   std::deque<Chunk> sealed;
-   Chunk cur;
-   {
-      std::lock_guard<std::mutex> lock(m_mutex);
-      sealed = m_sealed;
-      cur = m_cur;
-   }
-
-   std::vector<const Chunk *> chunks;
-   for (const Chunk &c : sealed)
-      chunks.push_back(&c);
-   if (!cur.data.empty())
-      chunks.push_back(&cur);
-   if (chunks.empty())
-   {
-      PLOGI << "ReplayRecorder: nothing recorded, not writing " << path;
-      return false;
-   }
-
-   try
-   {
-      std::filesystem::create_directories(std::filesystem::path(path).parent_path());
-   }
-   catch (const std::exception &e)
-   {
-      PLOGE << "ReplayRecorder: failed to create directory for " << path << ": " << e.what();
-      return false;
-   }
-
-   std::ofstream out(path, std::ios::binary | std::ios::trunc);
-   if (!out.is_open())
-   {
-      PLOGE << "ReplayRecorder: failed to open " << path;
-      return false;
-   }
-
-   const uint32_t firstMs = chunks.front()->firstTimeMs;
-   const uint32_t lastMs = chunks.back()->lastTimeMs;
-   const uint32_t chunkCount = (uint32_t)chunks.size();
-   const uint16_t version = FORMAT_VERSION;
-   const uint16_t flags = 0; // bit 0 reserved for compression (Phase 1)
-
-   out.write("VPRP", 4);
-   out.write(reinterpret_cast<const char *>(&version), 2);
-   out.write(reinterpret_cast<const char *>(&flags), 2);
-   out.write(reinterpret_cast<const char *>(&firstMs), 4);
-   out.write(reinterpret_cast<const char *>(&lastMs), 4);
-   out.write(reinterpret_cast<const char *>(&chunkCount), 4);
-
-   size_t total = 20;
-   for (const Chunk *c : chunks)
-   {
-      const uint32_t size = (uint32_t)c->data.size();
-      out.write(reinterpret_cast<const char *>(&c->firstTimeMs), 4);
-      out.write(reinterpret_cast<const char *>(&size), 4);
-      out.write(reinterpret_cast<const char *>(c->data.data()), size);
-      total += 8 + size;
-   }
-   out.close();
-
-   PLOGI << "ReplayRecorder: wrote " << path << " (" << total << " bytes, " << chunkCount << " chunks, " << (lastMs - firstMs) << "ms)";
-   return true;
-}
-
 void ReplayRecorder::OpenChunk(uint32_t timeMs)
 {
    if (m_curOpen && !m_cur.data.empty())
    {
       m_cur.lastTimeMs = timeMs;
-      m_sealed.push_back(std::move(m_cur));
+      { // hand the sealed chunk to the writer thread; O(1) move, no I/O here
+         std::lock_guard<std::mutex> ql(m_queueMutex);
+         m_queue.push_back(std::move(m_cur));
+      }
+      m_queueCv.notify_one();
       m_cur = Chunk {};
    }
    m_cur.data.reserve(m_chunkCapacity);
    m_cur.firstTimeMs = timeMs;
    m_cur.lastTimeMs = timeMs;
    m_curOpen = true;
-   DropExpiredChunks(timeMs);
    m_emittingKeyframe = true; // EnsureSpace must not re-open the chunk we are seeding
    WriteKeyframe(timeMs);
    EmitSourceDefsAndFrames(timeMs);
@@ -587,12 +658,6 @@ void ReplayRecorder::WriteKeyframe(uint32_t timeMs)
       PutF32(v);
    }
    m_stateInit = true;
-}
-
-void ReplayRecorder::DropExpiredChunks(uint32_t nowMs)
-{
-   while (!m_sealed.empty() && nowMs - m_sealed.front().lastTimeMs > RING_WINDOW_MS)
-      m_sealed.pop_front();
 }
 
 uint8_t ReplayRecorder::BallId(HitBall *pHitBall)

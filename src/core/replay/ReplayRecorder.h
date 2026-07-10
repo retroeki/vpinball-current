@@ -8,6 +8,9 @@
 #include <deque>
 #include <mutex>
 #include <atomic>
+#include <thread>
+#include <condition_variable>
+#include <fstream>
 #include <unordered_map>
 
 #include "ReplayState.h"
@@ -18,19 +21,26 @@ class HitBall;
 class HitFlipper;
 namespace VPX { class Sound; }
 
-// Records resulting gameplay state (not inputs) into a rolling in-memory buffer:
-// ball transforms on a fixed 8 ms grid, flipper angles per 1 ms physics cycle while
-// moving, ball create/destroy events. Replay is playback of this state, never a
+// Records resulting gameplay state (not inputs): ball transforms on a fixed 8 ms
+// grid, flipper angles per 1 ms physics cycle while moving, ball create/destroy
+// events, displays, sounds. Replay is playback of this state, never a
 // re-simulation (see docs/replay-system-spec.md in the app repo for why).
+//
+// The FULL session is captured (revised 2026-07-10, was a 90 s ring): sealed
+// chunks are handed to a writer thread that appends them to <finalPath>.tmp as
+// play proceeds, so RAM holds only the open chunk regardless of session length
+// and the game thread never touches disk. On teardown the header is finalized
+// and the temp is renamed over finalPath, so finalPath always holds the last
+// COMPLETE session and a crash mid-session leaves only a .tmp that fails
+// header validation. The app splits the session file into per-game clips
+// afterwards (segmentation per docs/replay-moments-spec.md).
 //
 // Master switch: Standalone/ReplayRecord (Settings). When off, Player never
 // constructs this object, so the whole system costs nothing.
-//
-// Phase 0 scope: ball + flipper channels, uncompressed .vpr v0, auto-save on close.
 class ReplayRecorder final
 {
 public:
-   explicit ReplayRecorder(Player *player);
+   ReplayRecorder(Player *player, const string &finalPath);
    ~ReplayRecorder();
 
    // Called by PhysicsEngine at the end of every 1 ms physics cycle.
@@ -53,14 +63,12 @@ public:
    void OnBallCreated(HitBall *pHitBall);
    void OnBallDestroyed(HitBall *pHitBall);
 
-   // Serialize the current ring content to a .vpr file. Safe to call from any
-   // thread; briefly blocks recording while the ring is snapshotted.
-   bool SaveToFile(const std::string &path);
-
    static constexpr uint32_t BALL_SAMPLE_INTERVAL_MS = 8;    // 125 Hz ball transforms
-   static constexpr uint32_t RING_WINDOW_MS = 90 * 1000;     // keep the last 90 s
    static constexpr size_t CHUNK_SIZE = 64 * 1024;
    static constexpr uint16_t FORMAT_VERSION = 3;
+   // Marathon-session safety valve: stop appending past this (~4.3 h at ~65 KB/s);
+   // the recording stays valid, just truncated.
+   static constexpr uint64_t MAX_SESSION_BYTES = 1ull << 30;
 
    // Record types (format v3)
    enum RecordType : uint8_t
@@ -88,10 +96,12 @@ private:
       std::vector<uint8_t> data;
    };
 
-   void OpenChunk(uint32_t timeMs);          // seals current chunk, starts a new one with a keyframe
+   void OpenChunk(uint32_t timeMs);          // seals current chunk to the writer queue, starts a new one with a keyframe
    void EnsureSpace(size_t bytes, uint32_t timeMs);
    void WriteKeyframe(uint32_t timeMs);
-   void DropExpiredChunks(uint32_t nowMs);
+   void WriterLoop();                        // writer thread: drains the queue to the .tmp file
+   void AppendChunkToFile(const Chunk &c);   // writer thread only
+   void FinalizeFile();                      // teardown: patch header, rename .tmp over finalPath
    uint8_t BallId(HitBall *pHitBall);
 
    // Display / segment sources (PinMAME DMD, FlexDMD, Serum overrides, alphanumeric)
@@ -114,12 +124,27 @@ private:
    static void MatrixToQuat(const HitBall *pHitBall, float q[4]);
 
    Player *const m_player;
-   std::mutex m_mutex; // guards ring structure vs SaveToFile; appends are game-thread only
+   std::mutex m_mutex; // guards the open chunk; hooks append from game + audio threads
 
-   std::deque<Chunk> m_sealed;
    Chunk m_cur;
    bool m_curOpen = false;
    bool m_emittingKeyframe = false;
+
+   // Writer thread: sealed chunks stream to disk so RAM stays flat for any session length
+   std::string m_finalPath;
+   std::string m_tmpPath;
+   std::fstream m_file;
+   bool m_fileOk = false;
+   std::thread m_writerThread;
+   std::mutex m_queueMutex;
+   std::condition_variable m_queueCv;
+   std::deque<Chunk> m_queue;      // guarded by m_queueMutex
+   bool m_writerStop = false;      // guarded by m_queueMutex
+   uint32_t m_firstMs = 0;         // writer thread only (joined before FinalizeFile reads them)
+   uint32_t m_lastMs = 0;
+   uint32_t m_chunkCount = 0;
+   uint64_t m_bytesWritten = 0;
+   bool m_capWarned = false;
 
    std::unordered_map<HitBall *, uint8_t> m_ballIds;
    uint8_t m_nextBallId = 0;

@@ -437,7 +437,7 @@ Player::Player(PinTable *const table, const int playMode)
 
    // Recording and the ghost overlay only make sense for a live game
    if (!IsEditorMode() && m_replayPlayer == nullptr && m_ptable->m_settings.GetStandalone_ReplayRecord())
-      m_replayRecorder = new ReplayRecorder(this);
+      m_replayRecorder = new ReplayRecorder(this, g_pvp->GetPrefPath() + "replays" + PATH_SEPARATOR_CHAR + "last-session.vpr");
 
    if (!IsEditorMode() && m_replayPlayer == nullptr && m_ptable->m_settings.GetStandalone_ReplayGhost())
       m_replayGhost = new ReplayGhost(this, replayFile);
@@ -889,13 +889,12 @@ Player::~Player()
    // Signal plugins early since most fields will become invalid
    VPXPluginAPIImpl::GetInstance().OnGameEnd();
 
-   // Stop recording and persist the ring buffer before anything it references is torn down.
-   // Phase 0 debug behavior: always dump the last session so recording can be verified on device.
+   // Stop recording before anything it references is torn down. The destructor
+   // drains the write queue and finalizes the streamed session file.
    if (m_replayRecorder)
    {
       ReplayRecorder *const recorder = m_replayRecorder;
       m_replayRecorder = nullptr; // physics no longer feeds the recorder from here on
-      recorder->SaveToFile(g_pvp->GetPrefPath() + "replays" + PATH_SEPARATOR_CHAR + "last-session.vpr");
       delete recorder;
    }
    delete m_replayGhost;
