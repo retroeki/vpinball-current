@@ -34,9 +34,14 @@ public:
    // Called once per frame from Player::UpdateGameLogic instead of the physics update.
    void Update();
 
-   // Flashing pixel-style "R" indicator, top-left. Called from LiveUI::RenderUI
-   // inside an active ImGui frame; scale is the LiveUI overlay scale.
-   void DrawIndicator(float scale);
+   // Playback overlays, drawn from LiveUI::RenderUI inside an active ImGui
+   // frame: flashing pixel "R" (+ wordmark per logo mode), hook text for the
+   // first two seconds, end card for the final 1.2 s. Scale is the LiveUI
+   // overlay scale. These same overlays render into video during export.
+   void DrawOverlays(float scale);
+
+   bool IsExportMode() const { return m_exportMode; }
+   bool IsFinished() const { return m_finished; }
 
 private:
    void ResetLoop();
@@ -61,6 +66,17 @@ private:
    uint64_t m_startUs = 0;
    bool m_started = false;
    uint32_t m_lastT = 0;
+
+   // Export mode: unclocked fixed-step playback of [m_windowStartMs, m_windowEndMs),
+   // advanced exactly once per rendered frame, then the session stops itself
+   bool m_exportMode = false;
+   double m_stepMs = 1000.0 / 60.0;
+   double m_exportAccumMs = 0.0;
+   unsigned int m_lastSeenFrame = 0xFFFFFFFFu;
+   uint32_t m_windowStartMs = 0, m_windowEndMs = 0;
+   bool m_finished = false;
+   std::string m_hookText;
+   int m_logoMode = 1;
 
    struct LiveBall
    {

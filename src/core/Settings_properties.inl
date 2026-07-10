@@ -1374,6 +1374,12 @@ PropBool(Standalone, ResetLogOnPlay, "Reset Log on Play"s, ""s, g_isMobile);
 PropBool(Standalone, ReplayRecord, "Record Replay"s, "Master switch for the replay system: record gameplay state (balls, flippers) into a rolling buffer for replay clips"s, false);
 PropBool(Standalone, ReplayGhost, "Replay Ghost Overlay"s, "Debug overlay: draw the previous session's recorded ball path as looping ghost markers over live play"s, false);
 PropBool(Standalone, ReplayPlayback, "Replay Playback"s, "Play back the previous session's recording instead of a live game: table loads as scenery (no script/PinMAME/physics) and recorded ball and flipper state drives the renderer"s, false);
+PropBool(Standalone, ReplayExportMode, "Replay Export Mode"s, "Replay playback runs the configured window exactly once at a fixed frame step (unclocked, for video export) and then stops the session"s, false);
+PropIntUnbounded(Standalone, ReplayExportStartMs, "Replay Export Start"s, "Export window start in ms relative to the start of the recording (0 = from the beginning)"s, 0);
+PropIntUnbounded(Standalone, ReplayExportLenMs, "Replay Export Length"s, "Export window length in ms (0 = to the end of the recording)"s, 0);
+PropIntUnbounded(Standalone, ReplayExportFps, "Replay Export FPS"s, "Fixed frame step rate for replay export mode"s, 60);
+PropString(Standalone, ReplayHookText, "Replay Hook Text"s, "Overlay text shown centered for the first two seconds of replay playback"s, ""s);
+PropIntUnbounded(Standalone, ReplayLogoMode, "Replay Logo Mode"s, "Replay playback branding: 0 = none, 1 = corner pixel R + wordmark, 2 = end card outro (final 1.2 s)"s, 1);
 PropString(Standalone, VPRegPath, "VPRegPath"s, ""s, ""s);
 
 // Editor settings

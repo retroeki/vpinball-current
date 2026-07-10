@@ -366,9 +366,9 @@ void LiveUI::RenderUI()
    if (m_player->m_replayGhost)
       m_player->m_replayGhost->Draw();
 
-   // Replay playback indicator: flashing pixel "R", top-left
+   // Replay playback overlays: pixel "R" indicator, hook text, logo/end card
    if (m_player->m_replayPlayer)
-      m_player->m_replayPlayer->DrawIndicator(m_uiScale);
+      m_player->m_replayPlayer->DrawOverlays(m_uiScale);
 
    // Display plumb state overlay
    m_plumbOverlay.Update();

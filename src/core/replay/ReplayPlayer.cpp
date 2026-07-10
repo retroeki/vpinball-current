@@ -46,6 +46,25 @@ ReplayPlayer::ReplayPlayer(Player *player, const std::string &path)
       s_instance = this;
       SetupDisplayPublishing();
 
+      // Export configuration (all via Settings so the app needs no new JNI)
+      const Settings &settings = player->m_ptable->m_settings;
+      m_exportMode = settings.GetStandalone_ReplayExportMode();
+      const int fps = std::clamp(settings.GetStandalone_ReplayExportFps(), 24, 120);
+      m_stepMs = 1000.0 / (double)fps;
+      const int startMs = std::max(0, settings.GetStandalone_ReplayExportStartMs());
+      const int lenMs = std::max(0, settings.GetStandalone_ReplayExportLenMs());
+      m_windowStartMs = m_data.GetFirstMs() + (uint32_t)startMs;
+      m_windowEndMs = lenMs > 0 ? std::min(m_data.GetLastMs(), m_windowStartMs + (uint32_t)lenMs) : m_data.GetLastMs();
+      if (m_windowStartMs >= m_windowEndMs)
+      { // bad window: fall back to the whole recording
+         m_windowStartMs = m_data.GetFirstMs();
+         m_windowEndMs = m_data.GetLastMs();
+      }
+      m_hookText = settings.GetStandalone_ReplayHookText();
+      m_logoMode = std::clamp(settings.GetStandalone_ReplayLogoMode(), 0, 2);
+      if (m_exportMode)
+         PLOGI << "ReplayPlayer: EXPORT mode, window " << m_windowStartMs << ".." << m_windowEndMs << "ms at " << fps << "fps, hook '" << m_hookText << "', logo " << m_logoMode;
+
       PLOGI << "ReplayPlayer: playback of " << path << " (" << m_data.GetBalls().size() << " balls, " << m_data.GetFlippers().size() << " flippers, "
             << m_data.GetStateEvents().size() << " state events, " << m_liveDisplays.size() << " displays, " << m_liveSegs.size() << " seg displays, "
             << m_data.GetDurationMs() << "ms loop)";
@@ -207,15 +226,47 @@ void ReplayPlayer::Update()
    if (!m_loaded)
       return;
 
-   const uint64_t nowUs = usec();
-   if (!m_started)
+   uint32_t t;
+   if (m_exportMode)
    {
-      m_startUs = nowUs;
-      m_started = true;
+      if (m_finished)
+         return;
+      // Advance exactly once per rendered frame (UpdateGameLogic can run more
+      // than once per frame on the BGFX loop), never against the wall clock
+      if (m_player->m_overall_frames != m_lastSeenFrame)
+      {
+         if (m_lastSeenFrame != 0xFFFFFFFFu)
+            m_exportAccumMs += m_stepMs;
+         m_lastSeenFrame = m_player->m_overall_frames;
+      }
+      const double exportT = (double)m_windowStartMs + m_exportAccumMs;
+      if (exportT >= (double)m_windowEndMs)
+      {
+         m_finished = true;
+         PLOGI << "ReplayPlayer: export window complete (" << (m_windowEndMs - m_windowStartMs) << "ms), stopping session";
+         m_player->SetCloseState(Player::CS_STOP_PLAY);
+         return;
+      }
+      t = (uint32_t)exportT;
+      if (!m_started)
+      { // fast-forward cursors to the window start on the first frame
+         m_started = true;
+         if (t > m_data.GetFirstMs())
+         { /* cursors advance below; events up to t apply in this first pass */ }
+      }
    }
-   const uint32_t t = m_data.GetFirstMs() + (uint32_t)(((nowUs - m_startUs) / 1000) % m_data.GetDurationMs());
-   if (t < m_lastT)
-      ResetLoop();
+   else
+   {
+      const uint64_t nowUs = usec();
+      if (!m_started)
+      {
+         m_startUs = nowUs;
+         m_started = true;
+      }
+      t = m_data.GetFirstMs() + (uint32_t)(((nowUs - m_startUs) / 1000) % m_data.GetDurationMs());
+      if (t < m_lastT)
+         ResetLoop();
+   }
    m_lastT = t;
 
    // Advance the player clock: part animation (Player::PrepareFrame gates
@@ -241,25 +292,31 @@ void ReplayPlayer::Update()
       m_stateCursor++;
    }
 
-   // Sound effects: re-fire through the live API (recorder is off during playback)
-   const auto &soundEvents = m_data.GetSoundEvents();
-   while (m_soundCursor < soundEvents.size() && soundEvents[m_soundCursor].t <= t)
+   // Audible playback is skipped in export mode: the video's audio track is
+   // muxed from the recording app-side, and fixed-step rendering is not
+   // wall-clock synchronous. Everything visual still runs.
+   if (!m_exportMode)
    {
-      const ReplayData::SoundEvent &e = soundEvents[m_soundCursor++];
-      if (m_player->m_PlaySound)
+      // Sound effects: re-fire through the live API (recorder is off during playback)
+      const auto &soundEvents = m_data.GetSoundEvents();
+      while (m_soundCursor < soundEvents.size() && soundEvents[m_soundCursor].t <= t)
       {
+         const ReplayData::SoundEvent &e = soundEvents[m_soundCursor++];
+         if (m_player->m_PlaySound)
+         {
+            const auto it = m_soundsByName.find(e.name);
+            if (it != m_soundsByName.end())
+               m_player->m_audioPlayer->PlaySound(it->second, e.volumeOffset, e.randomPitch, e.pitch, e.panOffset, e.fadeOffset, e.loopcount, e.useSame, e.restart);
+         }
+      }
+      const auto &soundStops = m_data.GetSoundStops();
+      while (m_soundStopCursor < soundStops.size() && soundStops[m_soundStopCursor].t <= t)
+      {
+         const ReplayData::SoundStopEvent &e = soundStops[m_soundStopCursor++];
          const auto it = m_soundsByName.find(e.name);
          if (it != m_soundsByName.end())
-            m_player->m_audioPlayer->PlaySound(it->second, e.volumeOffset, e.randomPitch, e.pitch, e.panOffset, e.fadeOffset, e.loopcount, e.useSame, e.restart);
+            m_player->m_audioPlayer->StopSound(it->second);
       }
-   }
-   const auto &soundStops = m_data.GetSoundStops();
-   while (m_soundStopCursor < soundStops.size() && soundStops[m_soundStopCursor].t <= t)
-   {
-      const ReplayData::SoundStopEvent &e = soundStops[m_soundStopCursor++];
-      const auto it = m_soundsByName.find(e.name);
-      if (it != m_soundsByName.end())
-         m_player->m_audioPlayer->StopSound(it->second);
    }
 
    // Display frames (DMD, FlexDMD, colorized overrides): copy into the live
@@ -301,21 +358,24 @@ void ReplayPlayer::Update()
    }
 
    // ROM audio (music/callouts): enqueue recorded PCM with a little lookahead so
-   // the device never starves between frames
-   const auto &audioBlocks = m_data.GetAudioBlocks();
-   while (m_audioCursor < audioBlocks.size() && audioBlocks[m_audioCursor].t <= t + 200)
+   // the device never starves between frames. Not audible during export.
+   if (!m_exportMode)
    {
-      const ReplayData::AudioBlock &b = audioBlocks[m_audioCursor++];
-      auto it = m_audioStreams.find(b.key);
-      if (it == m_audioStreams.end())
+      const auto &audioBlocks = m_data.GetAudioBlocks();
+      while (m_audioCursor < audioBlocks.size() && audioBlocks[m_audioCursor].t <= t + 200)
       {
-         VPX::AudioPlayer::AudioStreamID stream = m_player->m_audioPlayer->OpenAudioStream("Replay.Rom."s + std::to_string(b.key), b.rate, 1, false);
-         if (!stream)
-            continue;
-         it = m_audioStreams.emplace(b.key, stream).first;
+         const ReplayData::AudioBlock &b = audioBlocks[m_audioCursor++];
+         auto it = m_audioStreams.find(b.key);
+         if (it == m_audioStreams.end())
+         {
+            VPX::AudioPlayer::AudioStreamID stream = m_player->m_audioPlayer->OpenAudioStream("Replay.Rom."s + std::to_string(b.key), b.rate, 1, false);
+            if (!stream)
+               continue;
+            it = m_audioStreams.emplace(b.key, stream).first;
+         }
+         m_player->m_audioPlayer->SetStreamVolume(it->second, b.volume);
+         m_player->m_audioPlayer->EnqueueStream(it->second, reinterpret_cast<uint8_t *>(const_cast<int16_t *>(b.samples.data())), (int)(b.samples.size() * 2));
       }
-      m_player->m_audioPlayer->SetStreamVolume(it->second, b.volume);
-      m_player->m_audioPlayer->EnqueueStream(it->second, reinterpret_cast<uint8_t *>(const_cast<int16_t *>(b.samples.data())), (int)(b.samples.size() * 2));
    }
 
    for (const auto &entry : m_data.GetBalls())
@@ -402,30 +462,77 @@ void ReplayPlayer::Update()
    }
 }
 
-void ReplayPlayer::DrawIndicator(float scale)
+namespace
+{
+   constexpr ImU32 COL_INK = IM_COL32(17, 17, 18, 255);      // brand ink
+   constexpr ImU32 COL_INK_SOFT = IM_COL32(17, 17, 18, 200);
+   constexpr ImU32 COL_MINT = IM_COL32(150, 222, 206, 255);  // brand mint
+   constexpr ImU32 COL_TEXT = IM_COL32(247, 250, 249, 255);  // theme textPrimary
+
+   // 5x7 pixel "R", one bit per pixel, MSB = leftmost column
+   void DrawPixelR(ImDrawList *dl, const ImVec2 &origin, float px, bool shadow)
+   {
+      static constexpr uint8_t R_ROWS[7] = { 0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001 };
+      for (int row = 0; row < 7; row++)
+         for (int col = 0; col < 5; col++)
+            if (R_ROWS[row] & (0b10000 >> col))
+            {
+               const ImVec2 p0 { origin.x + col * px, origin.y + row * px };
+               const ImVec2 p1 { p0.x + px, p0.y + px };
+               if (shadow)
+                  dl->AddRectFilled({ p0.x + px * 0.25f, p0.y + px * 0.25f }, { p1.x + px * 0.25f, p1.y + px * 0.25f }, COL_INK_SOFT);
+               dl->AddRectFilled(p0, p1, COL_MINT);
+            }
+   }
+
+   void DrawCenteredText(ImDrawList *dl, const char *text, float y, float fontSize, ImU32 color)
+   {
+      ImFont *const font = ImGui::GetFont();
+      const ImVec2 sz = font->CalcTextSizeA(fontSize, FLT_MAX, 0.f, text);
+      const float x = (ImGui::GetIO().DisplaySize.x - sz.x) * 0.5f;
+      dl->AddText(font, fontSize, { x + 2.f, y + 2.f }, COL_INK_SOFT, text); // soft shadow for contrast
+      dl->AddText(font, fontSize, { x, y }, color, text);
+   }
+}
+
+void ReplayPlayer::DrawOverlays(float scale)
 {
    if (!m_loaded)
       return;
-   if ((m_lastT / 500) & 1) // 1 Hz blink on the playback clock
-      return;
-
-   // 5x7 pixel "R", one bit per pixel, MSB = leftmost column
-   static constexpr uint8_t R_ROWS[7] = { 0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001 };
-   const float px = 4.f * scale;             // pixel cell size
-   const ImVec2 origin { 16.f * scale, 16.f * scale };
-   constexpr ImU32 colShadow = IM_COL32(17, 17, 18, 200); // brand ink
-   constexpr ImU32 colPixel = IM_COL32(150, 222, 206, 255); // brand mint
 
    ImDrawList *const dl = ImGui::GetForegroundDrawList();
-   for (int row = 0; row < 7; row++)
-      for (int col = 0; col < 5; col++)
-         if (R_ROWS[row] & (0b10000 >> col))
-         {
-            const ImVec2 p0 { origin.x + col * px, origin.y + row * px };
-            const ImVec2 p1 { p0.x + px, p0.y + px };
-            dl->AddRectFilled({ p0.x + px * 0.25f, p0.y + px * 0.25f }, { p1.x + px * 0.25f, p1.y + px * 0.25f }, colShadow);
-            dl->AddRectFilled(p0, p1, colPixel);
-         }
+   const ImVec2 display = ImGui::GetIO().DisplaySize;
+   const uint32_t winStart = m_windowStartMs;
+   const uint32_t winEnd = m_windowEndMs;
+   const bool inEndCard = m_logoMode == 2 && m_lastT + 1200 >= winEnd;
+
+   if (inEndCard)
+   {
+      // End card outro: ink frame, wordmark. Replaces the loop seam.
+      dl->AddRectFilled({ 0.f, 0.f }, display, COL_INK);
+      DrawCenteredText(dl, "POCKET PINBALL", display.y * 0.48f, 22.f * scale, COL_MINT);
+      return;
+   }
+
+   // Hook text: centered for the first two seconds, then gone
+   if (!m_hookText.empty() && m_lastT < winStart + 2000)
+      DrawCenteredText(dl, m_hookText.c_str(), display.y * 0.34f, 30.f * scale, COL_TEXT);
+
+   // Corner wordmark (logo mode 1): steady brand mark, part of the exported video
+   if (m_logoMode == 1)
+   {
+      ImFont *const font = ImGui::GetFont();
+      const char *const wordmark = "POCKET PINBALL";
+      const float fontSize = 11.f * scale;
+      const ImVec2 pos { 16.f * scale, 16.f * scale };
+      dl->AddText(font, fontSize, { pos.x + 1.5f * scale, pos.y + 1.5f * scale }, COL_INK_SOFT, wordmark);
+      dl->AddText(font, fontSize, pos, COL_MINT, wordmark);
+   }
+
+   // Blinking pixel R: the "you are rewatching" indicator. Watch mode only,
+   // never part of an exported video.
+   if (!m_exportMode && ((m_lastT / 500) & 1) == 0)
+      DrawPixelR(dl, { 16.f * scale, m_logoMode == 1 ? 34.f * scale : 16.f * scale }, 4.f * scale, true);
 }
 
 Matrix3 ReplayPlayer::QuatToMatrix(float w, float x, float y, float z)
