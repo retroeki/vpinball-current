@@ -9,6 +9,8 @@
 #include "imgui/imgui.h"
 
 #include <cmath>
+#include <cstdio>
+#include <fstream>
 
 ReplayPlayer *ReplayPlayer::s_instance = nullptr;
 
@@ -63,7 +65,10 @@ ReplayPlayer::ReplayPlayer(Player *player, const std::string &path)
       m_hookText = settings.GetStandalone_ReplayHookText();
       m_logoMode = std::clamp(settings.GetStandalone_ReplayLogoMode(), 0, 2);
       if (m_exportMode)
+      {
          PLOGI << "ReplayPlayer: EXPORT mode, window " << m_windowStartMs << ".." << m_windowEndMs << "ms at " << fps << "fps, hook '" << m_hookText << "', logo " << m_logoMode;
+         DumpExportAudio(g_pvp->GetPrefPath() + "replays" + PATH_SEPARATOR_CHAR + "export-audio.wav");
+      }
 
       PLOGI << "ReplayPlayer: playback of " << path << " (" << m_data.GetBalls().size() << " balls, " << m_data.GetFlippers().size() << " flippers, "
             << m_data.GetStateEvents().size() << " state events, " << m_liveDisplays.size() << " displays, " << m_liveSegs.size() << " seg displays, "
@@ -82,6 +87,78 @@ ReplayPlayer::~ReplayPlayer()
    if (s_instance == this)
       s_instance = nullptr;
    CloseAudioStreams();
+}
+
+void ReplayPlayer::DumpExportAudio(const std::string &path) const
+{
+   // Assemble the export window's ROM audio (music/callouts) into a mono s16
+   // WAV so the host can encode and mux it without parsing .vpr. Uses the
+   // busiest stream; block timestamps place the PCM on the clip timeline with
+   // silence filling any gaps.
+   const auto &blocks = m_data.GetAudioBlocks();
+   std::map<uint8_t, size_t> sampleCount;
+   for (const auto &b : blocks)
+      if (b.t + 2000 >= m_windowStartMs && b.t <= m_windowEndMs)
+         sampleCount[b.key] += b.samples.size();
+   if (sampleCount.empty())
+   {
+      std::remove(path.c_str()); // no soundtrack for this window; stale files must not be muxed
+      PLOGI << "ReplayPlayer: no ROM audio in the export window";
+      return;
+   }
+   uint8_t bestKey = 0;
+   size_t bestCount = 0;
+   uint32_t rate = 22050;
+   for (const auto &entry : sampleCount)
+      if (entry.second > bestCount)
+      {
+         bestKey = entry.first;
+         bestCount = entry.second;
+      }
+
+   std::vector<int16_t> pcm;
+   pcm.reserve(bestCount + 4096);
+   double expectedMs = (double)m_windowStartMs;
+   for (const auto &b : blocks)
+   {
+      if (b.key != bestKey || b.t > m_windowEndMs)
+         continue;
+      const double blockDurMs = 1000.0 * (double)b.samples.size() / (double)b.rate;
+      if ((double)b.t + blockDurMs < (double)m_windowStartMs)
+         continue;
+      rate = b.rate;
+      if ((double)b.t > expectedMs + 30.0) // fill recording gaps with silence
+         pcm.resize(pcm.size() + (size_t)(((double)b.t - expectedMs) * rate / 1000.0), 0);
+      pcm.insert(pcm.end(), b.samples.begin(), b.samples.end());
+      expectedMs = (double)b.t + blockDurMs;
+   }
+
+   std::ofstream out(path, std::ios::binary | std::ios::trunc);
+   if (!out.is_open())
+   {
+      PLOGE << "ReplayPlayer: failed to write " << path;
+      return;
+   }
+   const uint32_t dataBytes = (uint32_t)(pcm.size() * 2);
+   const uint32_t chunkSize = 36 + dataBytes;
+   const uint16_t fmt = 1 /*PCM*/, channels = 1, bitsPerSample = 16, blockAlign = 2;
+   const uint32_t byteRate = rate * 2;
+   out.write("RIFF", 4);
+   out.write(reinterpret_cast<const char *>(&chunkSize), 4);
+   out.write("WAVEfmt ", 8);
+   const uint32_t fmtSize = 16;
+   out.write(reinterpret_cast<const char *>(&fmtSize), 4);
+   out.write(reinterpret_cast<const char *>(&fmt), 2);
+   out.write(reinterpret_cast<const char *>(&channels), 2);
+   out.write(reinterpret_cast<const char *>(&rate), 4);
+   out.write(reinterpret_cast<const char *>(&byteRate), 4);
+   out.write(reinterpret_cast<const char *>(&blockAlign), 2);
+   out.write(reinterpret_cast<const char *>(&bitsPerSample), 2);
+   out.write("data", 4);
+   out.write(reinterpret_cast<const char *>(&dataBytes), 4);
+   out.write(reinterpret_cast<const char *>(pcm.data()), dataBytes);
+   out.close();
+   PLOGI << "ReplayPlayer: wrote export soundtrack " << path << " (" << (pcm.size() * 1000 / rate) << "ms at " << rate << "Hz)";
 }
 
 void ReplayPlayer::SetupDisplayPublishing()

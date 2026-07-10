@@ -61,6 +61,18 @@
 // but the context is gone so the leak is meaningless).
 std::atomic<bool> g_bgfxIsAlive{false};
 
+#if defined(__ANDROID__)
+// Replay export target: when non-null, the render loop points the bgfx
+// swapchain at this ANativeWindow (a MediaCodec input surface owned by the
+// host) instead of the on-screen SDL window, and sizes the backbuffer to the
+// given dimensions. Set via VPinballLib::SetReplayExportSurface before the
+// playback session starts; cleared (and the window released) by the host
+// after the session ends.
+void* g_replayExportNwh = nullptr;
+int g_replayExportWidth = 0;
+int g_replayExportHeight = 0;
+#endif
+
 #elif defined(ENABLE_OPENGL)
 #include "typedefs3D.h"
 #include "TextureManager.h"
@@ -1011,7 +1023,10 @@ void RenderDevice::RenderThread(RenderDevice* rd, const bgfx::Init& initReq)
 #endif
 
 #if defined(__ANDROID__)
-         void* nwh = SDL_GetPointerProperty(SDL_GetWindowProperties(rd->m_outputWnd[0]->GetCore()), SDL_PROP_WINDOW_ANDROID_WINDOW_POINTER, NULL);
+         // Replay export: when the host installed an encoder surface, render into
+         // it instead of the on-screen SDL window (see g_replayExportNwh below)
+         void* nwh = g_replayExportNwh ? g_replayExportNwh
+                                       : SDL_GetPointerProperty(SDL_GetWindowProperties(rd->m_outputWnd[0]->GetCore()), SDL_PROP_WINDOW_ANDROID_WINDOW_POINTER, NULL);
          static void* prevNwh = nwh;
          if (nwh != prevNwh)
          {
@@ -1049,8 +1064,15 @@ void RenderDevice::RenderThread(RenderDevice* rd, const bgfx::Init& initReq)
             g_pplayer->m_renderProfiler->EnterProfileSection(FrameProfiler::PROFILE_RENDER_SUBMIT);
             rd->m_framePending = false; // Request next frame to be prepared as soon as possible
             rd->m_frameNoSync = false;
-            const int windowWidth = rd->m_outputWnd[0]->GetPixelWidth();
-            const int windowHeight = rd->m_outputWnd[0]->GetPixelHeight();
+            int windowWidth = rd->m_outputWnd[0]->GetPixelWidth();
+            int windowHeight = rd->m_outputWnd[0]->GetPixelHeight();
+            #if defined(__ANDROID__)
+            if (g_replayExportNwh && g_replayExportWidth > 0 && g_replayExportHeight > 0)
+            { // encoder surface owns the backbuffer size during export
+               windowWidth = g_replayExportWidth;
+               windowHeight = g_replayExportHeight;
+            }
+            #endif
             if ((gpuVSync != needsVSync) || (windowWidth != backBufferWidth) || (windowHeight != backBufferHeight))
             {
 #if VPX_TEARDOWN_DIAG
@@ -1292,7 +1314,8 @@ RenderDevice::RenderDevice(
    #elif BX_PLATFORM_IOS
    init.platformData.nwh = VPinballLib::VPinballLib::Instance().GetMetalLayer();
    #elif BX_PLATFORM_ANDROID
-   init.platformData.nwh = SDL_GetPointerProperty(SDL_GetWindowProperties(m_outputWnd[0]->GetCore()), SDL_PROP_WINDOW_ANDROID_WINDOW_POINTER, NULL);
+   init.platformData.nwh = g_replayExportNwh ? g_replayExportNwh
+                                             : SDL_GetPointerProperty(SDL_GetWindowProperties(m_outputWnd[0]->GetCore()), SDL_PROP_WINDOW_ANDROID_WINDOW_POINTER, NULL);
    #elif BX_PLATFORM_WINDOWS
    init.platformData.nwh = m_outputWnd[0]->GetNativeHWND();
    #elif BX_PLATFORM_STEAMLINK

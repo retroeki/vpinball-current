@@ -7,6 +7,7 @@
 
 #include <SDL3/SDL_system.h>
 #include <jni.h>
+#include <android/native_window_jni.h>
 #include <vector>
 
 #ifdef ENABLE_XR
@@ -312,6 +313,31 @@ JNIEXPORT jint JNICALL Java_org_vpinball_app_jni_VPinballJNI_VPinballSoftResume(
 JNIEXPORT jint JNICALL Java_org_vpinball_app_jni_VPinballJNI_VPinballPushKeyEvent(JNIEnv* env, jobject obj, jint scancode, jboolean pressed)
 {
    return VPinballPushKeyEvent(scancode, pressed ? 1 : 0);
+}
+
+// Replay export: point the renderer at a MediaCodec input Surface (or null to
+// clear and release). The ANativeWindow reference is held here across the
+// export session; the engine only borrows the pointer.
+static ANativeWindow* gReplayExportWindow = nullptr;
+
+JNIEXPORT jint JNICALL Java_org_vpinball_app_jni_VPinballJNI_VPinballSetReplayExportSurface(JNIEnv* env, jobject obj, jobject surface)
+{
+   ANativeWindow* const prev = gReplayExportWindow;
+   ANativeWindow* window = nullptr;
+   int width = 0, height = 0;
+   if (surface != nullptr)
+   {
+      window = ANativeWindow_fromSurface(env, surface);
+      if (window == nullptr)
+         return VPINBALL_STATUS_FAILURE;
+      width = ANativeWindow_getWidth(window);
+      height = ANativeWindow_getHeight(window);
+   }
+   gReplayExportWindow = window;
+   const VPINBALL_STATUS status = VPinballSetReplayExportSurface(window, width, height);
+   if (prev != nullptr)
+      ANativeWindow_release(prev);
+   return status;
 }
 
 JNIEXPORT jint JNICALL Java_org_vpinball_app_jni_VPinballJNI_VPinballSetThermalStatus(JNIEnv* env, jobject obj, jint status)

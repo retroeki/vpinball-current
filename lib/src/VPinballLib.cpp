@@ -21,6 +21,13 @@
 #include <cstdint>
 #include <nlohmann/json.hpp>
 
+#ifdef __ANDROID__
+// Replay export render target, defined in src/renderer/RenderDevice.cpp
+extern void* g_replayExportNwh;
+extern int g_replayExportWidth;
+extern int g_replayExportHeight;
+#endif
+
 #ifdef ENABLE_BGFX
 #include "bgfx/bgfx.h"
 #endif
@@ -1146,6 +1153,19 @@ VPINBALL_STATUS VPinballLib::PushKeyEvent(int scancode, bool pressed)
       pressed);
 
    return VPINBALL_STATUS_SUCCESS;
+}
+
+VPINBALL_STATUS VPinballLib::SetReplayExportSurface(void* nativeWindow, int width, int height)
+{
+#ifdef __ANDROID__
+   PLOGI << "SetReplayExportSurface: " << nativeWindow << " (" << width << 'x' << height << ')';
+   ::g_replayExportWidth = width;
+   ::g_replayExportHeight = height;
+   ::g_replayExportNwh = nativeWindow;
+   return VPINBALL_STATUS_SUCCESS;
+#else
+   return VPINBALL_STATUS_FAILURE;
+#endif
 }
 
 VPINBALL_STATUS VPinballLib::SetThermalStatus(int status)

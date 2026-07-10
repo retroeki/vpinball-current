@@ -106,6 +106,12 @@ public:
    // exactly what SDLInputHandler does for a real keypress.
    // scancode is SDL_Scancode (SDL_SCANCODE_7 = 36, _8 = 37, _END = 77, etc.)
    VPINBALL_STATUS PushKeyEvent(int scancode, bool pressed);
+   // Replay export target. nativeWindow is an ANativeWindow* obtained by the
+   // JNI layer from a MediaCodec input Surface (or null to clear). Must be set
+   // before LoadTable of the export playback session; the render loop then
+   // points the bgfx swapchain at it and sizes the backbuffer to width x height.
+   // The caller owns the window reference and releases it after clearing.
+   VPINBALL_STATUS SetReplayExportSurface(void* nativeWindow, int width, int height);
    // Called from the Android PowerManager.OnThermalStatusChangedListener so the stats overlay can surface the current thermal state.
    VPINBALL_STATUS SetThermalStatus(int status);
    // Called from Android's ACTION_BATTERY_CHANGED receiver (EXTRA_TEMPERATURE / 10).

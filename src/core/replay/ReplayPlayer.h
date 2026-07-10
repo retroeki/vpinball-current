@@ -47,6 +47,7 @@ private:
    void ResetLoop();
    void ApplyStateSnapshot(const ReplayData::StateSnapshot &snapshot);
    void CloseAudioStreams();
+   void DumpExportAudio(const std::string &path) const;
    void SetupDisplayPublishing();
    void TeardownDisplayPublishing();
    static Matrix3 QuatToMatrix(float w, float x, float y, float z);

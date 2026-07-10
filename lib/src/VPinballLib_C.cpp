@@ -215,6 +215,11 @@ VPINBALLAPI VPINBALL_STATUS VPinballPushKeyEvent(int scancode, int pressed)
    return VPinballLib::VPinballLib::Instance().PushKeyEvent(scancode, pressed != 0);
 }
 
+VPINBALLAPI VPINBALL_STATUS VPinballSetReplayExportSurface(void* nativeWindow, int width, int height)
+{
+   return VPinballLib::VPinballLib::Instance().SetReplayExportSurface(nativeWindow, width, height);
+}
+
 VPINBALLAPI VPINBALL_STATUS VPinballSetThermalStatus(int status)
 {
    return VPinballLib::VPinballLib::Instance().SetThermalStatus(status);
