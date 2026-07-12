@@ -62,11 +62,9 @@ ReplayPlayer::ReplayPlayer(Player *player, const std::string &path)
          m_windowStartMs = m_data.GetFirstMs();
          m_windowEndMs = m_data.GetLastMs();
       }
-      m_hookText = settings.GetStandalone_ReplayHookText();
-      m_logoMode = std::clamp(settings.GetStandalone_ReplayLogoMode(), 0, 2);
       if (m_exportMode)
       {
-         PLOGI << "ReplayPlayer: EXPORT mode, window " << m_windowStartMs << ".." << m_windowEndMs << "ms at " << fps << "fps, hook '" << m_hookText << "', logo " << m_logoMode;
+         PLOGI << "ReplayPlayer: EXPORT mode, window " << m_windowStartMs << ".." << m_windowEndMs << "ms at " << fps << "fps (clean render; the app burns overlays)";
          DumpExportAudio(g_pvp->GetPrefPath() + "replays" + PATH_SEPARATOR_CHAR + "export-audio.wav");
       }
 
@@ -541,10 +539,8 @@ void ReplayPlayer::Update()
 
 namespace
 {
-   constexpr ImU32 COL_INK = IM_COL32(17, 17, 18, 255);      // brand ink
    constexpr ImU32 COL_INK_SOFT = IM_COL32(17, 17, 18, 200);
    constexpr ImU32 COL_MINT = IM_COL32(150, 222, 206, 255);  // brand mint
-   constexpr ImU32 COL_TEXT = IM_COL32(247, 250, 249, 255);  // theme textPrimary
 
    // 5x7 pixel "R", one bit per pixel, MSB = leftmost column
    void DrawPixelR(ImDrawList *dl, const ImVec2 &origin, float px, bool shadow)
@@ -561,55 +557,19 @@ namespace
                dl->AddRectFilled(p0, p1, COL_MINT);
             }
    }
-
-   void DrawCenteredText(ImDrawList *dl, const char *text, float y, float fontSize, ImU32 color)
-   {
-      ImFont *const font = ImGui::GetFont();
-      const ImVec2 sz = font->CalcTextSizeA(fontSize, FLT_MAX, 0.f, text);
-      const float x = (ImGui::GetIO().DisplaySize.x - sz.x) * 0.5f;
-      dl->AddText(font, fontSize, { x + 2.f, y + 2.f }, COL_INK_SOFT, text); // soft shadow for contrast
-      dl->AddText(font, fontSize, { x, y }, color, text);
-   }
 }
 
 void ReplayPlayer::DrawOverlays(float scale)
 {
-   if (!m_loaded)
+   // Exports render CLEAN: the app previews and burns its own overlays (hook
+   // text, logo, site tag), so the engine ships bare gameplay frames. The only
+   // engine-drawn mark is the blinking pixel R — the "you are rewatching"
+   // indicator — in Watch mode, never in a video.
+   if (!m_loaded || m_exportMode)
       return;
 
-   ImDrawList *const dl = ImGui::GetForegroundDrawList();
-   const ImVec2 display = ImGui::GetIO().DisplaySize;
-   const uint32_t winStart = m_windowStartMs;
-   const uint32_t winEnd = m_windowEndMs;
-   const bool inEndCard = m_logoMode == 2 && m_lastT + 1200 >= winEnd;
-
-   if (inEndCard)
-   {
-      // End card outro: ink frame, wordmark. Replaces the loop seam.
-      dl->AddRectFilled({ 0.f, 0.f }, display, COL_INK);
-      DrawCenteredText(dl, "POCKET PINBALL", display.y * 0.48f, 22.f * scale, COL_MINT);
-      return;
-   }
-
-   // Hook text: centered for the first two seconds, then gone
-   if (!m_hookText.empty() && m_lastT < winStart + 2000)
-      DrawCenteredText(dl, m_hookText.c_str(), display.y * 0.34f, 30.f * scale, COL_TEXT);
-
-   // Corner wordmark (logo mode 1): steady brand mark, part of the exported video
-   if (m_logoMode == 1)
-   {
-      ImFont *const font = ImGui::GetFont();
-      const char *const wordmark = "POCKET PINBALL";
-      const float fontSize = 11.f * scale;
-      const ImVec2 pos { 16.f * scale, 16.f * scale };
-      dl->AddText(font, fontSize, { pos.x + 1.5f * scale, pos.y + 1.5f * scale }, COL_INK_SOFT, wordmark);
-      dl->AddText(font, fontSize, pos, COL_MINT, wordmark);
-   }
-
-   // Blinking pixel R: the "you are rewatching" indicator. Watch mode only,
-   // never part of an exported video.
-   if (!m_exportMode && ((m_lastT / 500) & 1) == 0)
-      DrawPixelR(dl, { 16.f * scale, m_logoMode == 1 ? 34.f * scale : 16.f * scale }, 4.f * scale, true);
+   if (((m_lastT / 500) & 1) == 0)
+      DrawPixelR(ImGui::GetForegroundDrawList(), { 16.f * scale, 16.f * scale }, 4.f * scale, true);
 }
 
 Matrix3 ReplayPlayer::QuatToMatrix(float w, float x, float y, float z)

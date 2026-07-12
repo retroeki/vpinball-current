@@ -34,10 +34,10 @@ public:
    // Called once per frame from Player::UpdateGameLogic instead of the physics update.
    void Update();
 
-   // Playback overlays, drawn from LiveUI::RenderUI inside an active ImGui
-   // frame: flashing pixel "R" (+ wordmark per logo mode), hook text for the
-   // first two seconds, end card for the final 1.2 s. Scale is the LiveUI
-   // overlay scale. These same overlays render into video during export.
+   // Watch-mode overlay, drawn from LiveUI::RenderUI inside an active ImGui
+   // frame: the blinking pixel "R" rewatch indicator. Exports render clean —
+   // the app burns its own overlays (hook text, logo, site tag) into the
+   // video after the fact. Scale is the LiveUI overlay scale.
    void DrawOverlays(float scale);
 
    bool IsExportMode() const { return m_exportMode; }
@@ -76,8 +76,6 @@ private:
    unsigned int m_lastSeenFrame = 0xFFFFFFFFu;
    uint32_t m_windowStartMs = 0, m_windowEndMs = 0;
    bool m_finished = false;
-   std::string m_hookText;
-   int m_logoMode = 1;
 
    struct LiveBall
    {
