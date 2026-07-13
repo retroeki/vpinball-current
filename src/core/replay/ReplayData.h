@@ -121,6 +121,8 @@ public:
 private:
    bool ParseChunk(const uint8_t *p, size_t size);
 
+   unsigned int m_skippedRecords = 0; // inconsistent records/chunks dropped during Load (logged once)
+
    uint32_t m_firstMs = 0;
    uint32_t m_lastMs = 0;
    std::map<uint8_t, BallTrack> m_balls;

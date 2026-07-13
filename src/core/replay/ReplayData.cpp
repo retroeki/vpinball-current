@@ -112,11 +112,20 @@ bool ReplayData::Load(const std::string &path)
       const uint32_t size = GetU32(p);
       if (p + size > end)
          return false;
+      // Chunks are self-contained: a malformed one loses its own records
+      // only. The old all-or-nothing reject meant one bad record anywhere
+      // silently killed playback of the whole clip (Watch fell back to a
+      // live game) — see the aux-display key mixup fixed in the recorder.
       if (!ParseChunk(p, size))
-         return false;
+      {
+         m_skippedRecords++;
+         PLOGW << "ReplayData: malformed chunk " << i << " ignored";
+      }
       p += size;
    }
 
+   if (m_skippedRecords)
+      PLOGW << "ReplayData: " << m_skippedRecords << " inconsistent record(s)/chunk(s) skipped";
    return !m_balls.empty() && m_lastMs > m_firstMs;
 }
 
@@ -323,25 +332,28 @@ bool ReplayData::ParseChunk(const uint8_t *p, size_t size)
          const uint8_t flags = GetU8(p);
          const uint32_t len = GetU32(p);
          if (p + len > end) return false;
+         // Record length is known, so an inconsistent frame (no def for its
+         // key, or a payload that doesn't match the def's size) is skippable:
+         // drop the frame, keep the file
          const auto def = m_displayDefs.find(e.key);
-         if (def == m_displayDefs.end())
-            return false; // frame before def: recorder always emits defs first
-         const size_t bpp = def->second.frameFormat == 2 /*SRGB888*/ ? 3 : def->second.frameFormat == 3 /*SRGB565*/ ? 2 : 1;
-         const size_t rawLen = (size_t)def->second.width * def->second.height * bpp;
-         e.payload.resize(rawLen);
-         if (flags & 1)
+         bool ok = def != m_displayDefs.end();
+         if (ok)
          {
-            if (!RleDecode(p, len, e.payload.data(), rawLen))
-               return false;
-         }
-         else
-         {
-            if (len != rawLen)
-               return false;
-            memcpy(e.payload.data(), p, rawLen);
+            const size_t bpp = def->second.frameFormat == 2 /*SRGB888*/ ? 3 : def->second.frameFormat == 3 /*SRGB565*/ ? 2 : 1;
+            const size_t rawLen = (size_t)def->second.width * def->second.height * bpp;
+            e.payload.resize(rawLen);
+            if (flags & 1)
+               ok = RleDecode(p, len, e.payload.data(), rawLen);
+            else if (len == rawLen)
+               memcpy(e.payload.data(), p, rawLen);
+            else
+               ok = false;
          }
          p += len;
-         m_displayFrames.push_back(std::move(e));
+         if (ok)
+            m_displayFrames.push_back(std::move(e));
+         else
+            m_skippedRecords++;
          break;
       }
       case ReplayRecorder::REC_SEG_FRAME:
@@ -353,24 +365,25 @@ bool ReplayData::ParseChunk(const uint8_t *p, size_t size)
          const uint8_t flags = GetU8(p);
          const uint16_t len = GetU16(p);
          if (p + len > end) return false;
+         // Same skip-don't-reject rule as REC_DISPLAY_FRAME
          const auto def = m_segDefs.find(e.key);
-         if (def == m_segDefs.end())
-            return false;
-         const size_t rawLen = (size_t)def->second.nElements * 16;
-         e.values.resize(rawLen);
-         if (flags & 1)
+         bool ok = def != m_segDefs.end();
+         if (ok)
          {
-            if (!RleDecode(p, len, e.values.data(), rawLen))
-               return false;
-         }
-         else
-         {
-            if (len != rawLen)
-               return false;
-            memcpy(e.values.data(), p, rawLen);
+            const size_t rawLen = (size_t)def->second.nElements * 16;
+            e.values.resize(rawLen);
+            if (flags & 1)
+               ok = RleDecode(p, len, e.values.data(), rawLen);
+            else if (len == rawLen)
+               memcpy(e.values.data(), p, rawLen);
+            else
+               ok = false;
          }
          p += len;
-         m_segFrames.push_back(std::move(e));
+         if (ok)
+            m_segFrames.push_back(std::move(e));
+         else
+            m_skippedRecords++;
          break;
       }
       default:

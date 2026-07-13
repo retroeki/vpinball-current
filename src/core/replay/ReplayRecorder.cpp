@@ -297,6 +297,7 @@ void ReplayRecorder::EnumerateSources(uint32_t timeMs)
          const uint8_t key = (uint8_t)m_displayKeys.size();
          m_displayKeys[src.id.id] = key;
          m_lastDisplayFrameId[key] = 0xFFFFFFFFu;
+         m_displayDefSrc[key] = src; // pinned: frames and keyframe re-emits must match THIS def
          WriteDisplayDef(timeMs, key, src);
          PLOGI << "ReplayRecorder: display source " << (int)key << ": " << src.width << 'x' << src.height << " format " << src.frameFormat;
       }
@@ -318,6 +319,7 @@ void ReplayRecorder::EnumerateSources(uint32_t timeMs)
          const uint8_t key = (uint8_t)m_segKeys.size();
          m_segKeys[src.id.id] = key;
          m_lastSegFrameId[key] = 0xFFFFFFFFu;
+         m_segDefSrc[key] = src; // pinned, same contract as m_displayDefSrc
          WriteSegDef(timeMs, key, src);
          PLOGI << "ReplayRecorder: seg source " << (int)key << ": " << src.nElements << " elements";
       }
@@ -332,6 +334,22 @@ void ReplayRecorder::PollDisplaySources(uint32_t timeMs)
       if (keyIt == m_displayKeys.end() || src.GetRenderFrame == nullptr)
          continue;
       const uint8_t key = keyIt->second;
+      // A frame's payload size must match the def written under its key; a
+      // re-enumerated entry whose geometry no longer matches its id would
+      // write a record the parser rejects (and one bad record used to kill
+      // the whole file). Skip it; if a later enumeration heals, we resume.
+      const DisplaySrcId &def = m_displayDefSrc[key];
+      if (src.width != def.width || src.height != def.height || src.frameFormat != def.frameFormat)
+      {
+         if (!m_displayShapeWarned[key])
+         {
+            m_displayShapeWarned[key] = true;
+            PLOGW << "ReplayRecorder: display source key " << (int)key << " geometry " << src.width << 'x' << src.height
+                  << " format " << src.frameFormat << " does not match its def (" << def.width << 'x' << def.height
+                  << " format " << def.frameFormat << "), frames skipped";
+         }
+         continue;
+      }
       const DisplayFrame f = src.GetRenderFrame(src.id);
       if (f.frame == nullptr || f.frameId == m_lastDisplayFrameId[key])
          continue;
@@ -368,6 +386,18 @@ void ReplayRecorder::PollDisplaySources(uint32_t timeMs)
       if (keyIt == m_segKeys.end() || src.GetState == nullptr)
          continue;
       const uint8_t key = keyIt->second;
+      // Same def-consistency rule as the display path above
+      const SegSrcId &def = m_segDefSrc[key];
+      if (src.nElements != def.nElements)
+      {
+         if (!m_segShapeWarned[key])
+         {
+            m_segShapeWarned[key] = true;
+            PLOGW << "ReplayRecorder: seg source key " << (int)key << " nElements " << src.nElements
+                  << " does not match its def (" << def.nElements << "), frames skipped";
+         }
+         continue;
+      }
       const SegDisplayFrame f = src.GetState(src.id);
       if (f.frame == nullptr || f.frameId == m_lastSegFrameId[key])
          continue;
@@ -450,25 +480,22 @@ void ReplayRecorder::EmitSourceDefsAndFrames(uint32_t timeMs)
    // Called right after a fresh chunk's keyframe: re-emit defs and the latest
    // payloads so playback can enter at any retained chunk. The chunk was just
    // opened, so appends here intentionally skip EnsureSpace (no reentrancy).
-   for (const DisplaySrcId &src : m_displaySources)
+   // Defs re-emit from the PINNED copies (m_displayDefSrc), never the live
+   // enumeration entries: cached payloads were sized against the pinned def,
+   // and a drifted live entry would write a def its frames don't match.
+   for (const auto &entry : m_displayDefSrc)
    {
-      const auto keyIt = m_displayKeys.find(src.id.id);
-      if (keyIt == m_displayKeys.end())
-         continue;
-      WriteDisplayDef(timeMs, keyIt->second, src);
-      const auto payload = m_lastDisplayPayload.find(keyIt->second);
+      WriteDisplayDef(timeMs, entry.first, entry.second);
+      const auto payload = m_lastDisplayPayload.find(entry.first);
       if (payload != m_lastDisplayPayload.end() && !payload->second.empty())
-         WriteDisplayFrame(timeMs, keyIt->second, payload->second);
+         WriteDisplayFrame(timeMs, entry.first, payload->second);
    }
-   for (const SegSrcId &src : m_segSources)
+   for (const auto &entry : m_segDefSrc)
    {
-      const auto keyIt = m_segKeys.find(src.id.id);
-      if (keyIt == m_segKeys.end())
-         continue;
-      WriteSegDef(timeMs, keyIt->second, src);
-      const auto payload = m_lastSegPayload.find(keyIt->second);
+      WriteSegDef(timeMs, entry.first, entry.second);
+      const auto payload = m_lastSegPayload.find(entry.first);
       if (payload != m_lastSegPayload.end() && !payload->second.empty())
-         WriteSegFrame(timeMs, keyIt->second, payload->second);
+         WriteSegFrame(timeMs, entry.first, payload->second);
    }
 }
 

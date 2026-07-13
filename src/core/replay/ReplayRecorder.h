@@ -167,6 +167,17 @@ private:
    std::vector<SegSrcId> m_segSources;
    std::unordered_map<uint64_t, uint8_t> m_displayKeys; // source id -> key (stable across re-enumeration)
    std::unordered_map<uint64_t, uint8_t> m_segKeys;
+   // The def as first written per key. Frames MUST match their key's def
+   // (payload size is derived from it at parse time), but bus re-enumeration
+   // can hand back entries whose geometry doesn't match their id (seen with
+   // B2S aux displays: a 14x10 RGB frame arrived under the DMD's key and one
+   // corrupt record made the strict loader reject the whole file). Polls
+   // validate against the pinned def and keyframes re-emit IT, never the
+   // live enumeration entry.
+   std::unordered_map<uint8_t, DisplaySrcId> m_displayDefSrc;
+   std::unordered_map<uint8_t, SegSrcId> m_segDefSrc;
+   std::unordered_map<uint8_t, bool> m_displayShapeWarned;
+   std::unordered_map<uint8_t, bool> m_segShapeWarned;
    std::unordered_map<uint8_t, unsigned int> m_lastDisplayFrameId;
    std::unordered_map<uint8_t, unsigned int> m_lastSegFrameId;
    std::unordered_map<uint8_t, std::vector<uint8_t>> m_lastDisplayPayload; // cached raw payload for keyframe re-emission
