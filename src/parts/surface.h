@@ -6,6 +6,8 @@
 
 #include "ui/resource.h"
 
+class LineSegSlingshot;
+
 class SurfaceData final : public BaseProperty
 {
 public:
@@ -141,6 +143,8 @@ public:
       }
       return false;
    }
+
+   const vector<LineSegSlingshot*> &GetSlingshotSegs() const { return m_vlinesling; } // replay state channel access
 
    SurfaceData m_d;
    bool m_disabled = false;

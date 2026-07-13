@@ -147,6 +147,8 @@ public:
    void SetDefaultPhysics(const bool fromMouseClick) final;
    ItemTypeEnum HitableGetItemType() const final { return eItemPlunger; }
 
+   HitPlunger *GetHitPlunger() const { return m_phitplunger; } // replay state channel access
+
    void WriteRegDefaults() final;
 
    DECLARE_REGISTRY_RESOURCEID(IDR_PLUNGER)

@@ -72,12 +72,16 @@ public:
    // at render rate (~140/s observed) and an RGB888 DMD frame is 12 KB that
    // byte-RLE cannot compress — uncapped this alone was multiple MB/s.
    static constexpr uint32_t DISPLAY_FRAME_MIN_INTERVAL_MS = 33;
-   static constexpr uint16_t FORMAT_VERSION = 3;
+   // v4 (2026-07-13): state registry gained plunger position, primitive
+   // disable-lighting + position, flasher alpha/color, light color/intensity,
+   // material opacity/color, bumper ring and slingshot frames. Slot numbers
+   // shifted, so v3 files are rejected (re-record), same as every prior bump.
+   static constexpr uint16_t FORMAT_VERSION = 4;
    // Marathon-session safety valve: stop appending past this (~4.3 h at ~65 KB/s);
    // the recording stays valid, just truncated.
    static constexpr uint64_t MAX_SESSION_BYTES = 1ull << 30;
 
-   // Record types (format v3)
+   // Record types (layouts unchanged since v3; v4 only changes state-slot numbering)
    enum RecordType : uint8_t
    {
       REC_KEYFRAME = 0,     // t u32, nBalls u8 { id u8, radius f32, pos 3xf32, quat 4xi16 }, nFlippers u8 { id u8, angle f32 }, nStateFields u16, f32 x nStateFields (registry order)

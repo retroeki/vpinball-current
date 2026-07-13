@@ -144,9 +144,16 @@ public:
    STDMETHOD(get_RotY)(/*[out, retval]*/ float *pVal);
    STDMETHOD(PlayHit)();
 
+   // Replay state channel access: the ring is hit-driven, so playback writes
+   // the recorded offset directly (m_ringAnimate stays false there, keeping
+   // UpdateAnimation from fighting the replayed values).
+   float GetReplayRingOffset() const;
+   void SetReplayRingOffset(const float offset);
+
    BumperData m_d;
 
 private:
+   void UpdateRingMesh();
    void UpdateSkirt(const bool doCalculation);
    void GenerateBaseMesh(Vertex3D_NoTex2 *buf) const;
    void GenerateSocketMesh(Vertex3D_NoTex2 *buf) const;

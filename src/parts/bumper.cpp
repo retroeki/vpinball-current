@@ -651,24 +651,8 @@ void Bumper::UpdateAnimation(const float diff_time_msec)
                   m_ringAnimate = false;
               }
          }
-         if (m_ringMeshBuffer && (old_bumperanim_ringAnimOffset != m_pbumperhitcircle->m_bumperanim_ringAnimOffset))
-         {
-            //TODO update Worldmatrix instead.
-            Vertex3D_NoTex2 *buf;
-            m_ringMeshBuffer->m_vb->Lock(buf);
-            for (unsigned int i = 0; i < bumperRingNumVertices; i++)
-            {
-               buf[i].x = m_ringVertices[i].x;
-               buf[i].y = m_ringVertices[i].y;
-               buf[i].z = m_ringVertices[i].z + m_pbumperhitcircle->m_bumperanim_ringAnimOffset;
-               buf[i].nx = m_ringVertices[i].nx;
-               buf[i].ny = m_ringVertices[i].ny;
-               buf[i].nz = m_ringVertices[i].nz;
-               buf[i].tu = m_ringVertices[i].tu;
-               buf[i].tv = m_ringVertices[i].tv;
-            }
-            m_ringMeshBuffer->m_vb->Unlock();
-         }
+         if (old_bumperanim_ringAnimOffset != m_pbumperhitcircle->m_bumperanim_ringAnimOffset)
+            UpdateRingMesh();
 
          FireGroupEvent(DISPID_AnimateEvents_Animate);
       }
@@ -702,6 +686,40 @@ void Bumper::UpdateAnimation(const float diff_time_msec)
          FireGroupEvent(DISPID_AnimateEvents_Animate);
       }
    }
+}
+
+void Bumper::UpdateRingMesh()
+{
+   if (!m_ringMeshBuffer)
+      return;
+   //TODO update Worldmatrix instead.
+   Vertex3D_NoTex2 *buf;
+   m_ringMeshBuffer->m_vb->Lock(buf);
+   for (unsigned int i = 0; i < bumperRingNumVertices; i++)
+   {
+      buf[i].x = m_ringVertices[i].x;
+      buf[i].y = m_ringVertices[i].y;
+      buf[i].z = m_ringVertices[i].z + m_pbumperhitcircle->m_bumperanim_ringAnimOffset;
+      buf[i].nx = m_ringVertices[i].nx;
+      buf[i].ny = m_ringVertices[i].ny;
+      buf[i].nz = m_ringVertices[i].nz;
+      buf[i].tu = m_ringVertices[i].tu;
+      buf[i].tv = m_ringVertices[i].tv;
+   }
+   m_ringMeshBuffer->m_vb->Unlock();
+}
+
+float Bumper::GetReplayRingOffset() const
+{
+   return m_pbumperhitcircle ? m_pbumperhitcircle->m_bumperanim_ringAnimOffset : 0.f;
+}
+
+void Bumper::SetReplayRingOffset(const float offset)
+{
+   if (!m_pbumperhitcircle || m_pbumperhitcircle->m_bumperanim_ringAnimOffset == offset)
+      return;
+   m_pbumperhitcircle->m_bumperanim_ringAnimOffset = offset;
+   UpdateRingMesh();
 }
 
 #pragma endregion
