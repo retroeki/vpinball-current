@@ -475,6 +475,18 @@ VPINBALLAPI int VPinballGetNVRAM(uint8_t* buffer, int maxBytes, int* isNvramTabl
    return q.bytesWritten;
 }
 
+VPINBALLAPI int VPinballGetPlayStats(uint32_t* wallMs, uint32_t* activeMs, uint32_t* ballsPlayed)
+{
+   if (wallMs) *wallMs = 0;
+   if (activeMs) *activeMs = 0;
+   if (ballsPlayed) *ballsPlayed = 0;
+   if (!g_pplayer) return 0;
+   if (wallMs) *wallMs = g_pplayer->m_playStats.GetWallMs();
+   if (activeMs) *activeMs = g_pplayer->m_playStats.GetActiveMs();
+   if (ballsPlayed) *ballsPlayed = g_pplayer->m_playStats.GetBallsDestroyed();
+   return 1;
+}
+
 // ---------------------------------------------------------------------------
 // Headless first-run NVRAM generation
 //

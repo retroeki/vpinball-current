@@ -663,6 +663,22 @@ void PhysicsEngine::UpdatePhysics()
       if (g_pplayer->m_replayRecorder)
          g_pplayer->m_replayRecorder->OnPhysicsCycle();
 
+      { // Always-on play stats: a cycle counts as active when any ball moves
+        // above ~50 units/s (a ball is 50 units across; parked/trough balls
+        // sit far below this)
+         bool anyBallMoving = false;
+         for (const auto hitBall : g_pplayer->m_vball)
+         {
+            const Vertex3Ds &v = hitBall->m_d.m_vel;
+            if (v.x * v.x + v.y * v.y + v.z * v.z > 0.0025f)
+            {
+               anyBallMoving = true;
+               break;
+            }
+         }
+         g_pplayer->m_playStats.OnPhysicsCycle(anyBallMoving);
+      }
+
       //PLOGD << "PT: " << physics_diff_time << ' ' << physics_to_graphic_diff_time << ' ' << (uint32_t)(m_curPhysicsFrameTime/1000) << ' ' << (uint32_t)(initial_time_usec/1000) << ' ' << cur_time_msec;
 
       m_curPhysicsFrameTime = m_nextPhysicsFrameTime; // new cycle, on physics frame boundary

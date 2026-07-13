@@ -156,6 +156,12 @@ VPINBALLAPI const char* VPinballGetTableVersion();
 // Returns 0 when isNvramTable=0 or when no bytes are available yet.
 VPINBALLAPI int VPinballGetNVRAM(uint8_t* buffer, int maxBytes, int* isNvramTable);
 
+// Always-on gameplay counters for the running session (score-submission
+// plausibility): simulated session ms (pause excluded), ms with any ball in
+// motion, and balls destroyed (drains/locks). Independent of the replay
+// setting. Returns 1 with the values filled, 0 when no table is running.
+VPINBALLAPI int VPinballGetPlayStats(uint32_t* wallMs, uint32_t* activeMs, uint32_t* ballsPlayed);
+
 // First-run NVRAM generation (PinMAME ROM tables). Boots the ROM HEADLESSLY via
 // libpinmame (no player / renderer / SDL surface / B2S) to create <rom>.nv when
 // it is missing, so the first real launch is immediately playable instead of

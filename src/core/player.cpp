@@ -1327,6 +1327,7 @@ void Player::DestroyBall(HitBall *pHitBall)
 
    if (m_replayRecorder)
       m_replayRecorder->OnBallDestroyed(pHitBall);
+   m_playStats.OnBallDestroyed();
 
    RemoveFromVectorSingle(m_vball, pHitBall);
    m_vballDelete.push_back(pHitBall->m_pBall);

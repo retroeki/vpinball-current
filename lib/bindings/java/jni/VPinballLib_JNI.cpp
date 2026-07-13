@@ -590,6 +590,18 @@ JNIEXPORT jbyteArray JNICALL Java_org_vpinball_app_jni_VPinballJNI_VPinballGetNV
    return result;
 }
 
+// Always-on gameplay counters for the running session: [sessionMs (pause
+// excluded), activeBallMs, ballsPlayed]. Null when no table is running.
+JNIEXPORT jlongArray JNICALL Java_org_vpinball_app_jni_VPinballJNI_VPinballGetPlayStats(JNIEnv* env, jobject obj)
+{
+   uint32_t wallMs = 0, activeMs = 0, balls = 0;
+   if (!VPinballGetPlayStats(&wallMs, &activeMs, &balls)) return nullptr;
+   const jlong values[3] = { (jlong)wallMs, (jlong)activeMs, (jlong)balls };
+   jlongArray result = env->NewLongArray(3);
+   env->SetLongArrayRegion(result, 0, 3, values);
+   return result;
+}
+
 JNIEXPORT jint JNICALL Java_org_vpinball_app_jni_VPinballJNI_VPinballResetTable(JNIEnv* env, jobject obj)
 {
    return VPinballResetTable();
