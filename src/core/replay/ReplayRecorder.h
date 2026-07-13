@@ -64,7 +64,14 @@ public:
    void OnBallDestroyed(HitBall *pHitBall);
 
    static constexpr uint32_t BALL_SAMPLE_INTERVAL_MS = 8;    // 125 Hz ball transforms
-   static constexpr size_t CHUNK_SIZE = 64 * 1024;
+   // 256 KB: every chunk seal costs a keyframe (state snapshot + re-emitted
+   // display payloads, ~32 KB on big tables). 64 KB chunks turned over so
+   // fast on RGB-DMD tables (FlexDMD) that keyframes were a third of the file.
+   static constexpr size_t CHUNK_SIZE = 256 * 1024;
+   // Display sources cap at ~30 fps in the recording: FlexDMD bumps frameId
+   // at render rate (~140/s observed) and an RGB888 DMD frame is 12 KB that
+   // byte-RLE cannot compress — uncapped this alone was multiple MB/s.
+   static constexpr uint32_t DISPLAY_FRAME_MIN_INTERVAL_MS = 33;
    static constexpr uint16_t FORMAT_VERSION = 3;
    // Marathon-session safety valve: stop appending past this (~4.3 h at ~65 KB/s);
    // the recording stays valid, just truncated.
@@ -180,6 +187,7 @@ private:
    std::unordered_map<uint8_t, bool> m_segShapeWarned;
    std::unordered_map<uint8_t, unsigned int> m_lastDisplayFrameId;
    std::unordered_map<uint8_t, unsigned int> m_lastSegFrameId;
+   std::unordered_map<uint8_t, uint32_t> m_lastDisplayWriteMs; // per-key ~30 fps write cap
    std::unordered_map<uint8_t, std::vector<uint8_t>> m_lastDisplayPayload; // cached raw payload for keyframe re-emission
    std::unordered_map<uint8_t, std::vector<uint8_t>> m_lastSegPayload;
    std::vector<uint8_t> m_frameScratch; // raw payload build buffer

@@ -350,6 +350,11 @@ void ReplayRecorder::PollDisplaySources(uint32_t timeMs)
          }
          continue;
       }
+      // Write cap (~30 fps): FlexDMD-style sources bump frameId at render
+      // rate; skipping here (before consuming frameId) just delays the write,
+      // so the NEWEST frame lands once the interval elapses
+      if (timeMs - m_lastDisplayWriteMs[key] < DISPLAY_FRAME_MIN_INTERVAL_MS)
+         continue;
       const DisplayFrame f = src.GetRenderFrame(src.id);
       if (f.frame == nullptr || f.frameId == m_lastDisplayFrameId[key])
          continue;
@@ -376,6 +381,12 @@ void ReplayRecorder::PollDisplaySources(uint32_t timeMs)
       else
          continue;
 
+      // Content dedupe: a bumped frameId with identical pixels writes nothing
+      // (a 12 KB memcmp is far cheaper than a 12 KB record)
+      if (m_frameScratch == m_lastDisplayPayload[key])
+         continue;
+
+      m_lastDisplayWriteMs[key] = timeMs;
       m_lastDisplayPayload[key] = m_frameScratch;
       WriteDisplayFrame(timeMs, key, m_frameScratch);
    }
@@ -407,6 +418,10 @@ void ReplayRecorder::PollDisplaySources(uint32_t timeMs)
       m_frameScratch.resize(n);
       for (size_t i = 0; i < n; i++)
          m_frameScratch[i] = (uint8_t)(std::clamp(f.frame[i], 0.f, 1.f) * 255.f);
+
+      // Same content dedupe as the display path
+      if (m_frameScratch == m_lastSegPayload[key])
+         continue;
 
       m_lastSegPayload[key] = m_frameScratch;
       WriteSegFrame(timeMs, key, m_frameScratch);
