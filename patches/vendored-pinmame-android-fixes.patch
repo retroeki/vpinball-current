@@ -1,0 +1,109 @@
+Android vendored-PinMAME fixes (re-apply after ANY external.sh re-fetch of pinmame)
+====================================================================================
+
+The pinmame source under external/android-arm64-v8a/Release/pinmame/pinmame/ is NOT
+tracked by git: external.sh rm -rf's and re-downloads it at the pinned SHA, silently
+wiping local fixes. That already happened once (between 2026-06-14 and 2026-06-26),
+regressing the segment-display fixes below ("missing segments" user reports, blank
+System 80 displays). This file is the durable copy of every local fix to that tree.
+
+Contains (against pinned pinmame 6ba56f6a8d6b5c912441e4b6b9de2cfa670591cc):
+ 1. src/libpinmame/libpinmame.cpp - GetSegDisplay: only read the modulated PWM buffer
+    when the table opts in via options.usemodsol (mirrors core.c useDimmedSeg).
+    Fixes blank System 80 BCD displays and partially-lit strobed alpha displays
+    (e.g. S11 Taxi). Originally fixed 2026-06-08..10, wiped, re-applied 2026-07-19.
+ 2. src/libpinmame/libpinmame.cpp - tag 2-digit Gottlieb credit/match status displays
+    as GTS1_4DIGIT hardware so ScoreView styles them green VFD (were UNKNOWN=amber).
+ 3. src/wpc/core.c - core_dmd_peek_raw_ring: read-only diagnostic accessor for the
+    raw PWM sub-frame ring (offline identify-stream analysis tooling; inert).
+ 4. src/wpc/core.c - core_dmd_update_identify: publish rawFrameId on the recompute
+    path (colour-DMD freeze fix, 2026-06-29).
+
+History note: a 5th change (GTS3 aligned-block identify combining, 2026-07-19 morning)
+was deployed once, did not fix the SMB stutter, and was REVERTED the same day - the
+sliding window matches upstream vpinball/pinmame master exactly. The real SMB fix is
+in the (git-tracked) Serum plugin: plugins/serum/serum.cpp [serum-scene fix] - the
+plugin treated Serum_Colorize()'s return as a plain millisecond delay, but the low
+word is the delay and the high bits are FLAG_RETURNED_V2_* markers; a scene-starting
+match (FLAG_RETURNED_V2_SCENE=0x40000) scheduled the next Serum_Rotate() 262+ seconds
+out, so scene-driven packs (smb3.cROMc: 682 trigger frames + scene generator) never
+played their authored scenes. Serum_Rotate() drives scene playback internally.
+
+Apply from the vpinball repo root:
+  patch -p1 -d external/android-arm64-v8a/Release/pinmame/pinmame < patches/vendored-pinmame-android-fixes.patch
+
+Then rebuild libpinmame (build dir already configured; do NOT run external.sh):
+  make -C external/android-arm64-v8a/Release/pinmame/pinmame/build -j8
+  cp <build>/libpinmame.so third-party/runtime-libs/android-arm64-v8a/
+  llvm-strip --strip-unneeded -o <app>/app/src/main/jniLibs/arm64-v8a/libpinmame.so <build>/libpinmame.so
+(NOTE: the pinmame build dir in the _060726 tree points at /mnt/c/vpinball-master -
+ sync src edits to BOTH trees and build in C:\vpinball-master.)
+
+--- a/src/libpinmame/libpinmame.cpp
++++ b/src/libpinmame/libpinmame.cpp
+@@ -1751,7 +1751,14 @@
+       const int type = msgLocals.sortedSegLayout[i].srcLayout->type & CORE_SEGALL;
+       assert(type < sizeof(nSegments) / sizeof(nSegments[0]));
+       const int nSegs = nSegments[type];
+-      if (coreGlobals.nAlphaSegs) // Always return modulated value if available
++      // [seg-display fix] Mirror core.c's useDimmedSeg gate (core.c ~1426): only read the
++      // modulated PWM buffer when the table opts into physical alpha-segment outputs via
++      // options.usemodsol. Drivers set nAlphaSegs unconditionally (s11.c, gts80.c, gts3.c,
++      // by6803.c, wpc.c), but without the opt-in the PWM integrator is not a valid luminance
++      // source: System 80 BCD games leave it all-zero (blank displays) and strobed alpha
++      // displays alias against the poll interval (partially lit digits, e.g. S11 Taxi).
++      // Fall back to the binary segments[] state, exactly like core.c's video path.
++      if (coreGlobals.nAlphaSegs && (options.usemodsol & (CORE_MODOUT_FORCE_ON | CORE_MODOUT_ENABLE_PHYSOUT_ALPHASEGS)))
+       {
+          int pos = CORE_MODOUT_SEG0 + msgLocals.sortedSegLayout[i].statePos * 16;
+          if (msgLocals.sortedSegLayout[i].srcLayout->type & CORE_SEGHIBIT) pos += 8;
+@@ -2061,6 +2068,10 @@
+                                                                          : msgLocals.segDisplays[msgLocals.nSegDisplays].srcId.nElements == 6 ? CTLPI_SEG_HARDWARE_GTS1_6DIGIT
+                                                                          : msgLocals.segDisplays[msgLocals.nSegDisplays].srcId.nElements == 7 ? CTLPI_SEG_HARDWARE_GTS80A_7DIGIT
+                                                                          : msgLocals.segDisplays[msgLocals.nSegDisplays].srcId.nElements == 20 ? CTLPI_SEG_HARDWARE_GTS80B_20DIGIT
++                                                                         // [seg-display fix] 2-digit credit/match status displays use the same Futaba VFD
++                                                                         // as the 4-digit status display; without a Gottlieb tag they fall to UNKNOWN and
++                                                                         // render amber instead of green (ScoreView styles Gottlieb hardware as green VFD).
++                                                                         : msgLocals.segDisplays[msgLocals.nSegDisplays].srcId.nElements == 2 ? CTLPI_SEG_HARDWARE_GTS1_4DIGIT
+                                                                          : CTLPI_SEG_HARDWARE_UNKNOWN; // This one should not happen but need to be checked (some playfield LED displays maybe ?)
+             break;
+             
+--- a/src/wpc/core.c
++++ b/src/wpc/core.c
+@@ -3602,6 +3602,19 @@
+    return dmd_state->luminanceFrame;
+ }
+ 
++// [diag] Read-only access to the raw PWM sub-frame ring for offline analysis tooling
++// (identify-stream research harness). Returns the ring base and its geometry.
++const UINT8* core_dmd_peek_raw_ring(const int displayIndex, unsigned int* nFrames, unsigned int* rawFrameSize, unsigned int* nextFrame, unsigned int* frameIndex)
++{
++  const core_tDMDPWMState* const dmd_state = (displayIndex >= 0 && displayIndex < 16) ? locals.dmdStates[displayIndex] : NULL;
++  if (dmd_state == NULL) return NULL;
++  *nFrames = dmd_state->nFrames;
++  *rawFrameSize = dmd_state->rawFrameSize;
++  *nextFrame = dmd_state->nextFrame;
++  *frameIndex = dmd_state->frame_index;
++  return dmd_state->rawFrames;
++}
++
+ UINT8* core_dmd_update_identify(const core_tLCDLayout* layout, unsigned int * rawFrameId)
+ {
+   core_tDMDPWMState* const dmd_state = locals.dmdStates[layout->index];
+@@ -3794,7 +3807,15 @@
+      memcpy(dmd_state->bitplaneFrame, dmd_state->tempRawFrame, dmd_state->frameSize);
+      dmd_state->rawFrameId++;
+   }
+-  
++
++  // [colour-dmd fix] Mirror core_dmd_update_pwm (which sets *lumFrameId before returning):
++  // the recompute path must publish the current rawFrameId to the out-param. Without this,
++  // the caller (libpinmame GetDisplayIdFrame) returns an uninitialised/stale frameId on every
++  // submitted-frame tick, so consumers gating on frameId (the standalone Serum colorize thread)
++  // never see the identify frame advance and the colorized DMD freezes even though the bitplane
++  // content is updating. The early-return path above already sets it; the recompute path did not.
++  *rawFrameId = dmd_state->rawFrameId;
++
+   return dmd_state->bitplaneFrame;
+ }
+ 
