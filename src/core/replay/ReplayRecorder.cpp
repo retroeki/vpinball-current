@@ -558,20 +558,22 @@ void ReplayRecorder::OnRomAudio(const AudioUpdateMsg &msg)
    const size_t nFrames = msg.bufferSize / (bytesPerSample * channels);
    if (nFrames < 2)
       return;
-   const uint16_t outRate = (uint16_t)std::min((double)UINT16_MAX, msg.sampleRate * 0.5);
+   // Full-rate mono downmix. This used to halve the rate too (a leftover of
+   // the 90 s RAM-ring budget), which capped ROM audio at ~22 kHz and made
+   // exports sound muffled; sessions stream to disk now, so ~88 KB/s is fine.
+   const uint16_t outRate = (uint16_t)std::min((double)UINT16_MAX, msg.sampleRate);
 
    std::lock_guard<std::mutex> lock(m_mutex);
 
-   // Downmix to mono s16 at half rate: average 2 frames x channels per output sample
-   const size_t outCount = nFrames / 2;
+   const size_t outCount = nFrames;
    m_audioScratch.resize(outCount);
-   const float invN = 1.f / (float)(2 * channels);
+   const float invN = 1.f / (float)channels;
    for (size_t i = 0; i < outCount; i++)
    {
       float acc = 0.f;
-      for (size_t s = 0; s < 2 * (size_t)channels; s++)
+      for (size_t s = 0; s < (size_t)channels; s++)
       {
-         const size_t idx = i * 2 * channels + s;
+         const size_t idx = i * (size_t)channels + s;
          acc += isFloat ? reinterpret_cast<const float *>(msg.buffer)[idx] * 32767.f : (float)reinterpret_cast<const int16_t *>(msg.buffer)[idx];
       }
       m_audioScratch[i] = (int16_t)std::clamp(acc * invN, -32768.f, 32767.f);

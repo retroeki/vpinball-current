@@ -65,6 +65,7 @@ private:
    bool m_loaded = false;
 
    uint64_t m_startUs = 0;
+   uint64_t m_lastUpdateUs = 0; // pause resilience: big frame gaps shift m_startUs
    bool m_started = false;
    uint32_t m_lastT = 0;
 

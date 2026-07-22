@@ -7,10 +7,12 @@
 #include "core/VPXPluginAPIImpl.h"
 
 #include "imgui/imgui.h"
+#include "miniaudio/miniaudio.h"
 
 #include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <unordered_map>
 
 ReplayPlayer *ReplayPlayer::s_instance = nullptr;
 
@@ -87,49 +89,295 @@ ReplayPlayer::~ReplayPlayer()
    CloseAudioStreams();
 }
 
+namespace
+{
+constexpr uint32_t MIX_RATE = 44100;
+
+// One scheduled playback of a table sound, reconstructed from the recorded
+// PlaySound/StopSound events. Volume changes without restart (the standard
+// music-ducking pattern: PlaySound with usesame and no restart) become gain
+// automation points so the music never pops.
+struct SfxInstance
+{
+   VPX::Sound *sound;
+   uint32_t startT;
+   int pitch;     // Hz offset added to the native rate, like SoundPlayer::Play
+   int plays;     // -1 = loop forever, else total number of plays
+   uint32_t cutT; // hard cut from StopSound / usesame+restart, UINT32_MAX if none
+   std::vector<std::pair<uint32_t, float>> gains; // (clip ms, 0..1 volume)
+};
+
+bool DecodeSoundMono(const VPX::Sound *sound, std::vector<float> &pcm, uint32_t &nativeRate)
+{
+   ma_decoder_config cfg = ma_decoder_config_init(ma_format_f32, 1, 0); // mono float at the file's native rate
+   cfg.channelMixMode = ma_channel_mix_mode_simple;
+   ma_decoder dec;
+   if (ma_decoder_init_memory(sound->GetFileRaw(), sound->GetFileSize(), &cfg, &dec) != MA_SUCCESS)
+      return false;
+   nativeRate = dec.outputSampleRate;
+   pcm.clear();
+   float buf[16384];
+   for (;;)
+   {
+      ma_uint64 read = 0;
+      const ma_result res = ma_decoder_read_pcm_frames(&dec, buf, 16384, &read);
+      pcm.insert(pcm.end(), buf, buf + read);
+      if (res != MA_SUCCESS || read < 16384)
+         break;
+   }
+   ma_decoder_uninit(&dec);
+   return nativeRate > 0 && !pcm.empty();
+}
+
+uint64_t QuerySoundFrames(const VPX::Sound *sound, uint32_t &nativeRate)
+{
+   ma_decoder_config cfg = ma_decoder_config_init(ma_format_f32, 1, 0);
+   cfg.channelMixMode = ma_channel_mix_mode_simple;
+   ma_decoder dec;
+   if (ma_decoder_init_memory(sound->GetFileRaw(), sound->GetFileSize(), &cfg, &dec) != MA_SUCCESS)
+      return 0;
+   nativeRate = dec.outputSampleRate;
+   ma_uint64 frames = 0;
+   if (ma_decoder_get_length_in_pcm_frames(&dec, &frames) != MA_SUCCESS || frames == 0)
+   { // format without a cheap length: count by decoding (rare)
+      float buf[16384];
+      for (;;)
+      {
+         ma_uint64 read = 0;
+         const ma_result res = ma_decoder_read_pcm_frames(&dec, buf, 16384, &read);
+         frames += read;
+         if (res != MA_SUCCESS || read < 16384)
+            break;
+      }
+   }
+   ma_decoder_uninit(&dec);
+   return nativeRate > 0 ? frames : 0;
+}
+}
+
 void ReplayPlayer::DumpExportAudio(const std::string &path) const
 {
-   // Assemble the export window's ROM audio (music/callouts) into a mono s16
-   // WAV so the host can encode and mux it without parsing .vpr. Uses the
-   // busiest stream; block timestamps place the PCM on the clip timeline with
-   // silence filling any gaps.
-   const auto &blocks = m_data.GetAudioBlocks();
-   std::map<uint8_t, size_t> sampleCount;
-   for (const auto &b : blocks)
-      if (b.t + 2000 >= m_windowStartMs && b.t <= m_windowEndMs)
-         sampleCount[b.key] += b.samples.size();
-   if (sampleCount.empty())
+   // Assemble the export window's FULL soundtrack into a mono s16 WAV at
+   // 44.1 kHz so the host can encode and mux it without parsing .vpr:
+   //  - table sound effects and music (recorded PlaySound/StopSound events,
+   //    mixed offline from the table's own sound files — original tables like
+   //    Goonies VPW have no ROM stream, ALL their audio lives here), and
+   //  - ROM audio (PinMAME music/callouts), every recorded stream.
+   // Loop state is tracked from the clip start so music that began before the
+   // export window still sounds inside it. Known limit: a loop started before
+   // the clip's first chunk is not in the clip at all and stays silent.
+   const uint32_t ws = m_windowStartMs, we = m_windowEndMs;
+   const size_t mixLen = (size_t)(((uint64_t)(we - ws)) * MIX_RATE / 1000);
+
+   // --- Reconstruct sound instances from the event stream (clip start -> window end)
+   struct SoundInfo
    {
-      std::remove(path.c_str()); // no soundtrack for this window; stale files must not be muxed
-      PLOGI << "ReplayPlayer: no ROM audio in the export window";
-      return;
-   }
-   uint8_t bestKey = 0;
-   size_t bestCount = 0;
-   uint32_t rate = 22050;
-   for (const auto &entry : sampleCount)
-      if (entry.second > bestCount)
+      uint64_t frames = 0;
+      uint32_t nativeRate = 0;
+   };
+   std::unordered_map<VPX::Sound *, SoundInfo> infos;
+   const auto &events = m_data.GetSoundEvents();
+   const auto &stops = m_data.GetSoundStops();
+   std::vector<SfxInstance> instances;
+   std::unordered_map<VPX::Sound *, std::vector<size_t>> active;
+
+   auto info = [&](VPX::Sound *s) -> SoundInfo & {
+      auto it = infos.find(s);
+      if (it == infos.end())
       {
-         bestKey = entry.first;
-         bestCount = entry.second;
+         SoundInfo fresh;
+         fresh.frames = QuerySoundFrames(s, fresh.nativeRate);
+         it = infos.emplace(s, fresh).first;
+      }
+      return it->second;
+   };
+   auto playMs = [&](const SfxInstance &ins) -> double { // duration of ONE play, after pitch
+      const SoundInfo &si = infos[ins.sound];
+      const double effRate = (double)si.nativeRate + (double)ins.pitch;
+      return (si.frames == 0 || effRate <= 0.0) ? 0.0 : 1000.0 * (double)si.frames / effRate;
+   };
+   auto naturalEndMs = [&](const SfxInstance &ins) -> double {
+      if (ins.plays < 0)
+         return 1e18;
+      return (double)ins.startT + (double)ins.plays * playMs(ins);
+   };
+   auto endMs = [&](const SfxInstance &ins) -> double { return std::min(naturalEndMs(ins), ins.cutT == UINT32_MAX ? 1e18 : (double)ins.cutT); };
+
+   size_t ei = 0, si = 0;
+   while (ei < events.size() || si < stops.size())
+   {
+      const bool takeStop = si < stops.size() && (ei >= events.size() || stops[si].t < events[ei].t);
+      const uint32_t t = takeStop ? stops[si].t : events[ei].t;
+      if (t > we)
+         break;
+      if (takeStop)
+      {
+         const auto it = m_soundsByName.find(stops[si].name);
+         if (it != m_soundsByName.end())
+         {
+            for (const size_t idx : active[it->second])
+               if (endMs(instances[idx]) > (double)t)
+                  instances[idx].cutT = t;
+            active[it->second].clear();
+         }
+         si++;
+         continue;
+      }
+      const ReplayData::SoundEvent &e = events[ei++];
+      const auto it = m_soundsByName.find(e.name);
+      if (it == m_soundsByName.end())
+         continue;
+      VPX::Sound *const sound = it->second;
+      const SoundInfo &sinfo = info(sound);
+      if (sinfo.frames == 0)
+         continue;
+      const float vol = std::clamp(dequantizeSignedPercent(sound->GetVolume()) + e.volumeOffset, 0.f, 1.f);
+      auto &act = active[sound];
+      // drop finished instances from the active list
+      act.erase(std::remove_if(act.begin(), act.end(), [&](size_t idx) { return endMs(instances[idx]) <= (double)t; }), act.end());
+      if (e.useSame && !act.empty())
+      {
+         SfxInstance &cur = instances[act.back()];
+         if (e.restart)
+            cur.cutT = t; // cut, then fall through to start a fresh instance
+         else
+         { // live path re-applies settings without restarting: gain automation
+            cur.gains.emplace_back(t, vol);
+            continue;
+         }
+      }
+      SfxInstance ins;
+      ins.sound = sound;
+      ins.startT = t;
+      ins.pitch = e.pitch;
+      ins.plays = e.loopcount < 0 ? -1 : (e.loopcount <= 1 ? 1 : e.loopcount);
+      ins.cutT = UINT32_MAX;
+      ins.gains.emplace_back(t, vol);
+      if (e.useSame)
+         act.clear();
+      act.push_back(instances.size());
+      instances.push_back(std::move(ins));
+      if (instances.size() > 20000)
+      { // runaway safety: keep the mix bounded on pathological clips
+         PLOGW << "ReplayPlayer: sound event cap hit, soundtrack truncated";
+         break;
+      }
+   }
+   // keep only instances audible inside the window
+   instances.erase(std::remove_if(instances.begin(), instances.end(),
+                      [&](const SfxInstance &ins) { return endMs(ins) <= (double)ws || (double)ins.startT >= (double)we; }),
+      instances.end());
+
+   const auto &blocks = m_data.GetAudioBlocks();
+   bool hasRom = false;
+   for (const auto &b : blocks)
+      if (b.t + 2000 >= ws && b.t <= we)
+      {
+         hasRom = true;
+         break;
       }
 
-   std::vector<int16_t> pcm;
-   pcm.reserve(bestCount + 4096);
-   double expectedMs = (double)m_windowStartMs;
+   if (instances.empty() && !hasRom)
+   {
+      std::remove(path.c_str()); // no soundtrack for this window; stale files must not be muxed
+      PLOGI << "ReplayPlayer: no audio in the export window";
+      return;
+   }
+
+   std::vector<float> mix(mixLen, 0.f);
+
+   // --- Sound effects: decode each unique sound once, place all its instances, free
+   std::unordered_map<VPX::Sound *, std::vector<size_t>> bySound;
+   for (size_t i = 0; i < instances.size(); i++)
+      bySound[instances[i].sound].push_back(i);
+   for (const auto &entry : bySound)
+   {
+      std::vector<float> pcm;
+      uint32_t nativeRate = 0;
+      if (!DecodeSoundMono(entry.first, pcm, nativeRate))
+         continue;
+      // Match the live SoundPlayer loudness: sqrt volume curve, and backglass
+      // sounds carry the stereo-decode compensation factor.
+      const float busGain = (entry.first->GetOutputTarget() == VPX::SNDOUT_BACKGLASS) ? 2.f : 1.f;
+      for (const size_t idx : entry.second)
+      {
+         const SfxInstance &ins = instances[idx];
+         const double step = ((double)nativeRate + (double)ins.pitch) / (double)MIX_RATE; // src frames per out sample
+         if (step <= 0.0)
+            continue;
+         const double lenOut = (double)pcm.size() / step; // out samples of one play
+         if (lenOut < 1.0)
+            continue;
+         const double insEndOut = (endMs(ins) - (double)ws) * MIX_RATE / 1000.0;
+         const double cutOut = ins.cutT == UINT32_MAX ? 1e18 : ((double)ins.cutT - (double)ws) * MIX_RATE / 1000.0;
+         const double startOut = ((double)ins.startT - (double)ws) * MIX_RATE / 1000.0;
+         const long firstK = startOut < 0.0 ? (long)(-startOut / lenOut) : 0;
+         for (long k = firstK; ins.plays < 0 || k < ins.plays; k++)
+         {
+            const double occStart = startOut + (double)k * lenOut;
+            if (occStart >= (double)mixLen || occStart >= insEndOut)
+               break;
+            const size_t from = (size_t)std::max(0.0, occStart);
+            const size_t to = (size_t)std::max(0.0, std::min({ (double)mixLen, occStart + lenOut, insEndOut }));
+            size_t gi = 0;
+            for (size_t i = from; i < to; i++)
+            {
+               const double tMs = (double)ws + (double)i * 1000.0 / MIX_RATE;
+               while (gi + 1 < ins.gains.size() && (double)ins.gains[gi + 1].first <= tMs)
+                  gi++;
+               float gain = busGain * sqrtf(ins.gains[gi].second);
+               const double toCut = cutOut - (double)i; // short fade on hard cuts to avoid clicks
+               if (toCut < MIX_RATE / 200.0)
+                  gain *= (float)std::max(0.0, toCut / (MIX_RATE / 200.0));
+               const double src = ((double)i - occStart) * step;
+               const size_t s0 = (size_t)src;
+               if (s0 + 1 >= pcm.size())
+                  break;
+               const float frac = (float)(src - (double)s0);
+               mix[i] += gain * (pcm[s0] * (1.f - frac) + pcm[s0 + 1] * frac);
+            }
+         }
+      }
+   }
+
+   // --- ROM audio: every stream, sequential per key with block timestamps
+   // re-anchoring on drift, resampled to the mix rate, block volume applied
+   std::map<uint8_t, double> romPos; // next out-sample position per stream key
    for (const auto &b : blocks)
    {
-      if (b.key != bestKey || b.t > m_windowEndMs)
+      if (b.t > we || b.rate == 0 || b.samples.size() < 2)
          continue;
       const double blockDurMs = 1000.0 * (double)b.samples.size() / (double)b.rate;
-      if ((double)b.t + blockDurMs < (double)m_windowStartMs)
+      if ((double)b.t + blockDurMs < (double)ws)
          continue;
-      rate = b.rate;
-      if ((double)b.t > expectedMs + 30.0) // fill recording gaps with silence
-         pcm.resize(pcm.size() + (size_t)(((double)b.t - expectedMs) * rate / 1000.0), 0);
-      pcm.insert(pcm.end(), b.samples.begin(), b.samples.end());
-      expectedMs = (double)b.t + blockDurMs;
+      const double anchor = ((double)b.t - (double)ws) * MIX_RATE / 1000.0;
+      auto it = romPos.find(b.key);
+      double pos = (it == romPos.end() || std::abs(anchor - it->second) > 30.0 * MIX_RATE / 1000.0) ? anchor : it->second;
+      const double step = (double)b.rate / (double)MIX_RATE;
+      const double nOut = (double)b.samples.size() / step;
+      const size_t from = (size_t)std::max(0.0, pos);
+      const size_t to = (size_t)std::max(0.0, std::min((double)mixLen, pos + nOut));
+      for (size_t i = from; i < to; i++)
+      {
+         const double src = ((double)i - pos) * step;
+         const size_t s0 = (size_t)src;
+         if (s0 + 1 >= b.samples.size())
+            break;
+         const float frac = (float)(src - (double)s0);
+         mix[i] += b.volume * ((float)b.samples[s0] * (1.f - frac) + (float)b.samples[s0 + 1] * frac) * (1.f / 32768.f);
+      }
+      romPos[b.key] = pos + nOut;
    }
+
+   // --- Normalize: never boost, only pull an overshooting mix down to -1 dBFS
+   float peak = 0.f;
+   for (const float v : mix)
+      peak = std::max(peak, std::abs(v));
+   const float norm = peak > 0.891f ? 0.891f / peak : 1.f;
+
+   std::vector<int16_t> pcm(mixLen);
+   for (size_t i = 0; i < mixLen; i++)
+      pcm[i] = (int16_t)std::clamp(mix[i] * norm * 32767.f, -32768.f, 32767.f);
 
    std::ofstream out(path, std::ios::binary | std::ios::trunc);
    if (!out.is_open())
@@ -137,6 +385,7 @@ void ReplayPlayer::DumpExportAudio(const std::string &path) const
       PLOGE << "ReplayPlayer: failed to write " << path;
       return;
    }
+   const uint32_t rate = MIX_RATE;
    const uint32_t dataBytes = (uint32_t)(pcm.size() * 2);
    const uint32_t chunkSize = 36 + dataBytes;
    const uint16_t fmt = 1 /*PCM*/, channels = 1, bitsPerSample = 16, blockAlign = 2;
@@ -156,7 +405,8 @@ void ReplayPlayer::DumpExportAudio(const std::string &path) const
    out.write(reinterpret_cast<const char *>(&dataBytes), 4);
    out.write(reinterpret_cast<const char *>(pcm.data()), dataBytes);
    out.close();
-   PLOGI << "ReplayPlayer: wrote export soundtrack " << path << " (" << (pcm.size() * 1000 / rate) << "ms at " << rate << "Hz)";
+   PLOGI << "ReplayPlayer: wrote export soundtrack " << path << " (" << (pcm.size() * 1000 / rate) << "ms at " << rate << "Hz, " << instances.size() << " sfx instances"
+         << (hasRom ? ", ROM audio" : "") << (norm < 1.f ? ", normalized" : "") << ')';
 }
 
 void ReplayPlayer::SetupDisplayPublishing()
@@ -338,6 +588,14 @@ void ReplayPlayer::Update()
          m_startUs = nowUs;
          m_started = true;
       }
+      // Pause resilience: game-logic stalls (the exit-replay dialog's soft
+      // pause, the app going to background) would otherwise leap the
+      // wall-clock playback time forward on resume. Any inter-frame gap
+      // beyond a hitch shifts the clock origin so the replay resumes from
+      // the frame it froze on.
+      else if (m_lastUpdateUs != 0 && nowUs - m_lastUpdateUs > 250 * 1000)
+         m_startUs += nowUs - m_lastUpdateUs - 16000;
+      m_lastUpdateUs = nowUs;
       t = m_data.GetFirstMs() + (uint32_t)(((nowUs - m_startUs) / 1000) % m_data.GetDurationMs());
       if (t < m_lastT)
          ResetLoop();
