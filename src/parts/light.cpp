@@ -371,6 +371,7 @@ void Light::UpdateAnimation(const float diff_time_msec)
    else if (m_rd != nullptr && m_rd->m_experimentalRendererOpt && !m_lightmapBaked && !m_backglass && m_d.m_visible
       && (m_lightmapMeshBuffer != nullptr) && (m_currentIntensity > 0.f)
       && ((g_pplayer->m_time_msec - m_lightmapStableSinceMs) >= 1500u)
+      && (g_pplayer->m_replayPlayer == nullptr) // replay playback replays a recorded light show: bake/un-bake churn would re-run the ~0.6s static prepass nearly every frame (exports crawled at ~1.5 fps)
       && g_pplayer->m_renderer->IsUsingStaticPrepass())
    {
       // Stable long enough to bake: force one re-bake so the next static prepass includes this lightmap. Eligibility
@@ -743,6 +744,7 @@ void Light::Render(const unsigned int renderMask)
       && !m_backglass && !isReflectionPass && !isLightBuffer
       && (m_currentIntensity > 0.f)
       && ((g_pplayer->m_time_msec - m_lightmapStableSinceMs) >= 1500u)
+      && (g_pplayer->m_replayPlayer == nullptr) // no baking during replay playback (must mirror the re-bake hook, see above)
       && g_pplayer->m_renderer->IsUsingStaticPrepass();
    if ((isStaticOnly ? lightmapBakeable : !lightmapBakeable)
       && m_d.m_visible
