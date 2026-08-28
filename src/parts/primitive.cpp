@@ -1232,8 +1232,7 @@ void Primitive::Render(const unsigned int renderMask)
    // static prepass instead of redrawing them every dynamic frame. Excludes grouped, already-static and reflective prims.
    // Runs once per frame BEFORE the gates (so even already-baked prims are re-checked for movement); dirty coalesces.
    const bool autoStaticOn = m_rd->m_experimentalAutoStaticOpt && !m_groupdRendering && !m_d.m_staticRendering
-      && (reflection_probe == nullptr) && g_pplayer->m_renderer->IsUsingStaticPrepass()
-      && (g_pplayer->m_replayPlayer == nullptr); // replay playback replays recorded transforms: eligible/ineligible churn would re-run the ~0.6s static prepass per move burst (see Light::UpdateAnimation)
+      && (reflection_probe == nullptr) && g_pplayer->m_renderer->IsUsingStaticPrepass();
    if (autoStaticOn && m_autoStaticLastEvalFrame != g_pplayer->m_overall_frames)
    {
       m_autoStaticLastEvalFrame = g_pplayer->m_overall_frames;
