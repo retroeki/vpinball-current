@@ -56,6 +56,42 @@ const TablePatch kTablePatches[] = {
      "For each obj in PlayerScores\r\n\t\t\tobj.ResetToZero\r\n\t\tNext\r\n\t\tFor each obj in PlayerScoresOn\r\n\t\t\tobj.ResetToZero\r\n\t\tNext\r\n\t\tIf Table1.ShowDT = True then\r\n\t\t\tFor each obj in PlayerScores\r\n\t\t\t\tobj.ResetToZero",
      true,
      "Circus: hoist the score-reel ResetToZero out of the ShowDT=True gate so reels zero each new game" },
+   // Dark Chaos (GLF original, featured table): mirror the 2-character ball-number
+   // display into the FlexDMD segment slots 32..33 (players fill 0..31 of the 2x16),
+   // so the FlexDMD plugin can publish it as an extra seg group for the per-table
+   // ScoreView layout (red digits under the dot display, matching the desktop look).
+   // The GLF write path is under On Error Resume Next, so with the virtual segment
+   // DMD off the extra writes are inert, exactly like the player displays today.
+   // Three coordinated edits:
+   // 1) grow the mirror array from 32 to 38 slots (also matches the 38-slot
+   //    m_segData the native FlexDMD.SetSegments copies),
+   // 2) widen the enable-time zeroing loop accordingly (regex tolerates indentation),
+   // 3) give the ball display a FlexDMD mirror index right where the author set its
+   //    B2S mirror index.
+   { "Dark Chaos (apophis 2025) 2.0.vpx",
+     "Dim glf_flex_alphadmd_segments(31)",
+     "Dim glf_flex_alphadmd_segments(37)", false,
+     "Dark Chaos: grow FlexDMD segment mirror array to 38 slots for the ball display" },
+   { "Dark Chaos (apophis 2025) 2.0.vpx",
+     "For i = 0 To 31(\\s+glf_flex_alphadmd_segments\\(i\\) = 0)",
+     "For i = 0 To 37$1", true,
+     "Dark Chaos: zero all 38 FlexDMD mirror slots on virtual segment DMD enable" },
+   { "Dark Chaos (apophis 2025) 2.0.vpx",
+     "segment_display_ball.ExternalB2SSegmentIndex = 1",
+     "segment_display_ball.ExternalB2SSegmentIndex = 1\r\n    segment_display_ball.ExternalFlexDmdSegmentIndex = 32", false,
+     "Dark Chaos: mirror the ball-number display into FlexDMD segment slots 32..33" },
+   // 4) Ball-drain light show: a cached show step can list the same fade cache name for
+   //    two lights, so the second shows_added.Add throws VBS 457 (duplicate dictionary
+   //    key). The error aborts DelayTick before its delayQueue.Remove, so the same
+   //    delayed callback re-fires every frame - an endless error storm. Guarding the Add
+   //    is behavior-preserving: shows_added is a name-set consumed by GlfShowStepHandler
+   //    (duplicates collapse), and the duplicate's re-created fade show goes through
+   //    GlfRunningShow.init's own stop-and-replace path (StopRunningShow removes the
+   //    glf_running_shows key before the re-Add).
+   { "Dark Chaos (apophis 2025) 2.0.vpx",
+     "shows_added.Add cache_name, True",
+     "If Not shows_added.Exists(cache_name) Then shows_added.Add cache_name, True", false,
+     "Dark Chaos: tolerate duplicate fade cache names in a light-show step (VBS 457 storm on ball drain)" },
 };
 const size_t kTablePatchCount = sizeof(kTablePatches) / sizeof(kTablePatches[0]);
 

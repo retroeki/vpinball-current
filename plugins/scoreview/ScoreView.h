@@ -123,6 +123,13 @@ private:
 
    vector<Layout> m_layouts;
    bool m_invalidBestLayout = true;
+   // While NOTHING is matched (m_bestLayout == nullptr, dead panel), Render
+   // periodically refreshes the resolver and re-selects — recovery for a lost
+   // display-change notification (ResURIResolver UnsubscribeMsg first-match bug):
+   // AlphaDMD only starts publishing once FlexDMD's segments appear (~1s into a
+   // Dark Chaos session), and a missed notification would leave the per-table
+   // layout unmatched forever. No-op for any table with a matched layout.
+   int m_noLayoutRescan = 0;
    // Tracks the ctrl://reel host side-channel (ReelDmd). It is not a CTLPI display
    // source, so OnResChanged never fires for it; Render polls it and forces a
    // re-select when it appears/disappears so the reel layout is (de)selected.

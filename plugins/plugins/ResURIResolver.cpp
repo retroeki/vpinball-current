@@ -84,6 +84,20 @@ ResURIResolver::ResURIResolver(const MsgPluginAPI &msgAPI, unsigned int endpoint
    }
 }
 
+void ResURIResolver::Refresh()
+{
+   if (m_isDestroyed)
+      return;
+   if (m_onDisplayChangedMsgId)
+      OnDisplaySrcChanged(m_onDisplayChangedMsgId, this, nullptr);
+   if (m_onSegChangedMsgId)
+      OnSegSrcChanged(m_onSegChangedMsgId, this, nullptr);
+   if (m_onInputChangedMsgId)
+      OnInputSrcChanged(m_onInputChangedMsgId, this, nullptr);
+   if (m_onDevChangedMsgId)
+      OnDevSrcChanged(m_onDevChangedMsgId, this, nullptr);
+}
+
 void ResURIResolver::BeginDestruction()
 {
    if (m_isDestroyed)

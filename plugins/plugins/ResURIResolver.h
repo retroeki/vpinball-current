@@ -67,6 +67,13 @@ public:
    // This must be called before any code that might trigger message broadcasts
    void BeginDestruction();
 
+   // Re-enumerate all tracked source lists and drop the resolution caches, as if
+   // every on-changed notification had just fired. Recovery hook for a consumer
+   // whose change subscription was lost (see the UnsubscribeMsg first-match note
+   // at the top of ResURIResolver.cpp): a source that appeared after the lost
+   // notification would otherwise stay invisible forever.
+   void Refresh();
+
    float GetFloatState(const std::string &link);
    
    struct DisplayState

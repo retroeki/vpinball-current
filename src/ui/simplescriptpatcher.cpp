@@ -2457,14 +2457,9 @@ std::string SimpleScriptPatcher::PatchScript(const std::string& script, const st
         PLOGI.printf("SimpleScriptPatcher: patches applied (output %zu chars)", result.length());
         PLOGI.printf("%s", s_patchReport.c_str());
 
-        // Debug: Check if GLF patch survived to the end (only if script uses GLF)
-        if (original.find("glf_funcRefMap") != std::string::npos) {
-            if (result.find("glf_last_isGetRef") != std::string::npos) {
-                PLOGI.printf("GLF patch: FINAL CHECK - glf_last_isGetRef PRESENT in result");
-            } else {
-                PLOGE.printf("GLF patch: FINAL CHECK - glf_last_isGetRef MISSING from result!");
-            }
-        }
+        // The glf_last_isGetRef FINAL CHECK that used to live here belonged to
+        // PatchGlfBooleanArray, which is disabled at the call site above - the marker it
+        // looked for is never injected, so it flagged an error on every GLF table load.
 
         // Dump patched script for debugging/error reporting
         DumpScript(result, "patched_script.vbs");

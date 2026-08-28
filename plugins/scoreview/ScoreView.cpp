@@ -494,7 +494,7 @@ void ScoreView::Select(const float scoreW, const float scoreH)
    // each layout matches the live PinMAME sources, so we can see whether a real segment
    // display is advertised for this ROM and whether any layout fully matches it. Bounded
    // so a long session does not flood logcat. Remove once the investigation is closed.
-   static int s_selDbg = 0; // [SEG-DIAG] DISABLED for this session (set back to 60 to re-enable the dump)
+   static int s_selDbg = 0; // [SEG-DIAG] off; set to 60 to re-arm the selection dump for an investigation
    const bool selDbg = (s_selDbg > 0);
    if (selDbg) { --s_selDbg; LOGI("ScoreView::Select: output=%.0fx%.0f AR=%.2f layouts=%d", scoreW, scoreH, rtAR, (int)m_layouts.size()); }
 
@@ -524,7 +524,12 @@ void ScoreView::Select(const float scoreW, const float scoreH)
                // segment layouts render the real thing. Without this check the
                // 128x32 synthetic source AR-matches the bundled DMD layouts and
                // their +10 weight would beat the segment layouts.
-               || (display.source->hardware & CTLPI_DISPLAY_HARDWARE_FAMILY_MASK) == CTLPI_DISPLAY_HARDWARE_SEG_RENDER)
+               // Scoped to default-source visuals: a per-table layout that names
+               // the plugin explicitly (e.g. ctrl://alphadmd/display, Dark Chaos)
+               // is a deliberate opt-in to the synthetic render. All bundled
+               // layouts use ctrl://default/..., so ROM tables are unchanged.
+               || (((display.source->hardware & CTLPI_DISPLAY_HARDWARE_FAMILY_MASK) == CTLPI_DISPLAY_HARDWARE_SEG_RENDER)
+                   && (visual.srcUri.rfind("ctrl://default/", 0) == 0)))
             {
                layout.unmatchedVisuals++;
                // LOGI("ScoreView::Select: layout %.0fx%.0f visual DMD '%s' dmdSize=%dx%d -> source=NULL (unmatched)",
@@ -655,6 +660,18 @@ bool ScoreView::Render(VPXRenderContext2D* ctx)
    if (reelAvailable != m_lastReelAvailable)
    {
       m_lastReelAvailable = reelAvailable;
+      m_invalidBestLayout = true;
+   }
+
+   // Dead-panel recovery: while nothing is matched, re-enumerate the resolver's
+   // source lists and re-select at a low rate (~1s at 60fps). Covers sources that
+   // appear late (AlphaDMD starts only once FlexDMD publishes segments) when the
+   // change notification was lost to the ResURIResolver unsubscribe-steal bug.
+   // Tables with a matched layout never enter this path.
+   if ((m_bestLayout == nullptr) && !m_invalidBestLayout && (++m_noLayoutRescan >= 60))
+   {
+      m_noLayoutRescan = 0;
+      m_resURIResolver.Refresh();
       m_invalidBestLayout = true;
    }
 

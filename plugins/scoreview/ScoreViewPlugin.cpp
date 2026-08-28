@@ -7,6 +7,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <memory>
+#include <filesystem>
 
 #include "common.h"
 
@@ -39,8 +40,21 @@ static int OnRender(VPXRenderContext2D* ctx, void*)
       vpxApi->GetTableInfo(&tableInfo);
 
       scoreView = std::make_unique<ScoreView>(msgApi, endpointId, vpxApi);
-      LOGI("ScoreView: Loading layouts from table path: %s", PathFromFilename(tableInfo.path).c_str());
-      scoreView->Load(PathFromFilename(tableInfo.path));
+      // Per-table layout: "<table>.scv" next to the .vpx, exact-file scoped. This
+      // replaces the upstream directory scan on purpose: the app keeps ALL tables in
+      // one flat folder, so a directory-wide *.scv pickup would apply one table's
+      // layout to every table. No table ships such a file today; the app generates
+      // one for special-cased tables (Dark Chaos), so any other table loads the
+      // bundled defaults exactly as before.
+      string tableLayout = tableInfo.path;
+      if (const size_t dot = tableLayout.find_last_of('.'); dot != string::npos)
+         tableLayout = tableLayout.substr(0, dot);
+      tableLayout += ".scv";
+      if (std::filesystem::exists(std::filesystem::path(tableLayout)))
+      {
+         LOGI("ScoreView: Loading per-table layout: %s", tableLayout.c_str());
+         scoreView->Load(tableLayout);
+      }
       if (!scoreView->HasLayouts())
       {
          // Load default layouts provided with plugin

@@ -225,11 +225,21 @@ static constexpr segDisplay segDisplays[6] = {
 
 template <typename T> constexpr inline T clamp(const T x, const T mn, const T mx) { return std::max(std::min(x, mx), mn); }
 
+// The 0.01 luminance floor draws UNLIT segments as faint ghosts (the classic
+// dmd-extensions hardware-DMD look). Desktop FlexDMD draws nothing for unlit
+// segments, so the Dark Chaos featured-table scoreview opts out per-launch via
+// [Plugin.AlphaDMD] DrawUnlitSegments=0 (written by the app for that table only,
+// default on -> every other consumer, incl. external DMD mirroring, unchanged).
+MSGPI_BOOL_VAL_SETTING(drawUnlitSegsProp, "DrawUnlitSegments", "Draw unlit segments",
+   "Draw unlit segments as faint ghost dots (classic hardware DMD look)", false, true);
+
+static float unlitSegFloor = 0.01f;
+
 static void DrawChar(const int x, const int y, const segDisplay& display, const float* const __restrict lum, const int nSeg)
 {
    for (int seg = 0; seg < nSeg; seg++)
    {
-      const float v = clamp(lum[seg], 0.01f, 1.f);
+      const float v = clamp(lum[seg], unlitSegFloor, 1.f);
       for (int i = 0; i < display.segs[seg].nDots; i++)
       {
          const int pos = 128 * (y + display.segs[seg].dots[i][1]) + (x + display.segs[seg].dots[i][0]);
@@ -328,6 +338,7 @@ static void RenderThread()
          continue;
 
       // Render for DMD
+      unlitSegFloor = drawUnlitSegsProp_Get() ? 0.01f : 0.f;
       lum = groupLum;
       memset(renderFrame, 0, sizeof(renderFrame));
       switch (dmdLayout)
@@ -558,19 +569,19 @@ static void OnSegSrcChanged(const unsigned int, void* userData, void* msgData)
          }
       }
    }
-   {
-      static int logCount = 0;
-      if (logCount < 10) {
-         logCount++;
-         std::stringstream ss;
-         ss << "AlphaDMD: seg sources changed, " << selectedSources.size() << " display(s) [";
-         for (size_t i = 0; i < selectedSources.size(); i++)
-            ss << (i == 0 ? "" : ", ") << selectedSources[i].nElements;
-         ss << "] -> layout=" << static_cast<int>(dmdLayout)
-            << (dmdLayout == DmdLayouts::Undefined ? " (UNSUPPORTED, nothing published)" : "");
-         LPI_LOGI("%s", ss.str().c_str());
-      }
-   }
+   // {
+   //    static int logCount = 0;
+   //    if (logCount < 10) {
+   //       logCount++;
+   //       std::stringstream ss;
+   //       ss << "AlphaDMD: seg sources changed, " << selectedSources.size() << " display(s) [";
+   //       for (size_t i = 0; i < selectedSources.size(); i++)
+   //          ss << (i == 0 ? "" : ", ") << selectedSources[i].nElements;
+   //       ss << "] -> layout=" << static_cast<int>(dmdLayout)
+   //          << (dmdLayout == DmdLayouts::Undefined ? " (UNSUPPORTED, nothing published)" : "");
+   //       LPI_LOGI("%s", ss.str().c_str());
+   //    }
+   // }
    lock.unlock();
 
    // If we are starting or stopping rendering, report it
@@ -599,6 +610,9 @@ MSGPI_EXPORT void MSGPIAPI AlphaDMDPluginLoad(const uint32_t sessionId, const Ms
    endpointId = sessionId;
    LPISetup(endpointId, msgApi); // upstream never wired the shared logging API, so the plugin was fully silent
    LPI_LOGI("AlphaDMD: plugin loaded");
+
+   // Dark Chaos featured-table opt-out for the unlit-segment ghosts (default on)
+   msgApi->RegisterSetting(endpointId, &drawUnlitSegsProp);
    dmd128Id = {
       .id = { { endpointId, 0 } },
       .groupId = { { endpointId, 0 } },

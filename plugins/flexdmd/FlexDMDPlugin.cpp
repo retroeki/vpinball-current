@@ -380,6 +380,43 @@ static SegDisplayFrame GetState(const CtlResId id)
 }
 
 
+// Dark Chaos featured-table support: the per-table script patch (tablepatches.cpp)
+// mirrors the table's 2-character ball-number display into m_segData slots 32..33,
+// just above the 2x16 player area that RenderMode_SEG_2x16Alpha publishes. When the
+// host opts in via [Plugin.FlexDMD] PublishBallSegGroup (written per-launch by the
+// app for that table only, default off), those two characters are published as their
+// own tiny seg group so a per-table ScoreView layout can render them. The group gets
+// a distinct groupId and is appended AFTER the main groups, so AlphaDMD's
+// first-group arrangement matching (2x16 -> dot raster) is untouched.
+MSGPI_BOOL_VAL_SETTING(ballSegGroupProp, "PublishBallSegGroup", "Publish ball seg group",
+   "Publish FlexDMD seg slots 32-33 as an extra 2-element group (Dark Chaos ball number)", false, false);
+
+static constexpr uint32_t kBallSegResId = 999;     // layout addresses it as ctrl://flexdmd/seg?id=999
+static constexpr uint32_t kBallSegGroupId = 0x42414C4C; // 'BALL' — never collides with flexId-based group ids
+static float ballSegLuminances[2 * 16] = {};
+
+static SegDisplayFrame GetBallSegState(const CtlResId id)
+{
+   if (id.endpointId != endpointId)
+      return { 0, nullptr };
+   for (FlexDMD* pFlex : flexDmds)
+   {
+      // Only 2x16 alpha mode leaves slots 32..33 unused; other seg modes may map them.
+      if (pFlex->GetShow() && (pFlex->GetRenderMode() == RenderMode_SEG_2x16Alpha))
+      {
+         float* lum = ballSegLuminances;
+         for (int i = 0; i < 2; i++)
+         {
+            uint16_t v = pFlex->GetSegFrame()[32 + i];
+            for (int j = 0; j < 16; j++, v >>= 1)
+               lum[i * 16 + j] = (v & 1) ? 1.f : 0.f;
+         }
+         return { pFlex->GetFrameId(), ballSegLuminances };
+      }
+   }
+   return { 0, nullptr };
+}
+
 static void AddSegSrc(GetSegSrcMsg& msg, uint32_t flexId, int displayIndex, int nDisplays, unsigned int nElements, SegElementType type)
 {
    if (msg.count < msg.maxEntryCount)
@@ -399,14 +436,14 @@ static void AddSegSrc(GetSegSrcMsg& msg, uint32_t flexId, int displayIndex, int 
 static void onGetSegSrc(const unsigned int eventId, void* userData, void* msgData)
 {
    GetSegSrcMsg& msg = *static_cast<GetSegSrcMsg*>(msgData);
-   static int logCount = 0;
-   if (logCount < 5) {
-      logCount++;
-      LPI_LOGI("onGetSegSrc: %zu FlexDMD instances", flexDmds.size());
-      for (const FlexDMD* pFlex : flexDmds) {
-         LPI_LOGI("  FlexDMD id=%u Show=%d RenderMode=%d", pFlex->GetId(), pFlex->GetShow(), pFlex->GetRenderMode());
-      }
-   }
+   // static int logCount = 0;
+   // if (logCount < 5) {
+   //    logCount++;
+   //    LPI_LOGI("onGetSegSrc: %zu FlexDMD instances", flexDmds.size());
+   //    for (const FlexDMD* pFlex : flexDmds) {
+   //       LPI_LOGI("  FlexDMD id=%u Show=%d RenderMode=%d", pFlex->GetId(), pFlex->GetShow(), pFlex->GetRenderMode());
+   //    }
+   // }
    for (const FlexDMD* pFlex : flexDmds)
    {
       if (pFlex->GetShow())
@@ -516,6 +553,33 @@ static void onGetSegSrc(const unsigned int eventId, void* userData, void* msgDat
                break;
             default:
                break;
+         }
+      }
+   }
+
+   // Dark Chaos ball-number group (see GetBallSegState above). Appended after the
+   // main groups so consumers that select the first group (AlphaDMD) still see the
+   // plain 2x16 arrangement. Published only when the host opted in via the
+   // PublishBallSegGroup setting, so every other table is byte-identical to before.
+   if (ballSegGroupProp_Get())
+   {
+      for (const FlexDMD* pFlex : flexDmds)
+      {
+         if (pFlex->GetShow() && (pFlex->GetRenderMode() == RenderMode_SEG_2x16Alpha))
+         {
+            if (msg.count < msg.maxEntryCount)
+            {
+               msg.entries[msg.count] = {};
+               msg.entries[msg.count].id = { endpointId, kBallSegResId };
+               msg.entries[msg.count].groupId = { endpointId, kBallSegGroupId };
+               msg.entries[msg.count].hardware = CTLPI_SEG_HARDWARE_UNKNOWN;
+               msg.entries[msg.count].nElements = 2;
+               msg.entries[msg.count].elementType[0] = CTLPI_SEG_LAYOUT_14D;
+               msg.entries[msg.count].elementType[1] = CTLPI_SEG_LAYOUT_14D;
+               msg.entries[msg.count].GetState = GetBallSegState;
+            }
+            msg.count++;
+            break;
          }
       }
    }
@@ -643,6 +707,9 @@ MSGPI_EXPORT void MSGPIAPI FlexDMDPluginLoad(const uint32_t sessionId, const Msg
 
    // Setup login
    LPISetup(endpointId, msgApi);
+
+   // Dark Chaos ball seg group opt-in (default off; see GetBallSegState)
+   msgApi->RegisterSetting(endpointId, &ballSegGroupProp);
 
    // Contribute DMDs and segment displays when show is true
    onDmdSrcChangeId = msgApi->GetMsgID(CTLPI_NAMESPACE, CTLPI_DISPLAY_ON_SRC_CHG_MSG);

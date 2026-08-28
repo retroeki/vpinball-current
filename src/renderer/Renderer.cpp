@@ -3153,7 +3153,10 @@ void Renderer::DrawSegmentDisplay(VPXRenderContext2D* ctx, VPXSegDisplayRenderSt
 {
    const bool isLinearOutput = *((bool*)ctx->rendererData);
    VPXPluginAPIImpl& vxpApi = VPXPluginAPIImpl::GetInstance();
-   std::shared_ptr<BaseTexture> const gTex = vxpApi.GetTexture(glassTex);
+   // Null-guard like DrawDisplay above: a layout without a Glass block passes a null
+   // glass texture (first hit by the Dark Chaos per-table layout; every bundled
+   // layout ships glass, so this path was never exercised before).
+   std::shared_ptr<BaseTexture> const gTex = glassTex ? vxpApi.GetTexture(glassTex) : nullptr;
    RenderDevice* const rdl = g_pplayer->m_renderer->m_renderDevice;
    // Use max blending as segment may overlap in the glass diffuse: we retain the most lighted one which is wrong but looks ok (otherwise we would have to deal with colorspace conversions and layering between glass and emitter)
    rdl->ResetRenderState();
