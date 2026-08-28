@@ -139,6 +139,10 @@ VPINBALLAPI VPINBALL_STATUS VPinballSetViewY(float y);   // Camera Y position (c
 VPINBALLAPI float VPinballGetViewY();
 VPINBALLAPI VPINBALL_STATUS VPinballSetViewZ(float z);   // Camera Z / height (cm, default 70)
 VPINBALLAPI float VPinballGetViewZ();
+VPINBALLAPI VPINBALL_STATUS VPinballSetViewScaleX(float scaleX);   // Scene scale along playfield width axis (0.5-1.5, default 1)
+VPINBALLAPI float VPinballGetViewScaleX();
+VPINBALLAPI VPINBALL_STATUS VPinballSetViewScaleY(float scaleY);   // Scene scale along playfield height axis (0.5-1.5, default 1)
+VPINBALLAPI float VPinballGetViewScaleY();
 
 // Table Info
 

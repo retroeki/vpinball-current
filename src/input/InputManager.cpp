@@ -59,7 +59,8 @@ InputManager::InputManager()
       // When forced, clear any existing touch zones to ensure hardcoded layout
       if (touchZonesForced)
          m_touchRegionMap.clear();
-      PLOGI << "Registering " << 13 << " touch zones (forced=" << touchZonesForced << ")";
+      const bool oneHandedFlippers = settings.GetStandalone_TouchOneHandedFlippers();
+      PLOGI << "Registering " << (oneHandedFlippers ? 17 : 13) << " touch zones (forced=" << touchZonesForced << " oneHandedFlippers=" << oneHandedFlippers << ")";
       addTouchRegion(RECT { 0, 0, 33, 10 }, GetAddCreditActionId(0));
       // Top-middle zone: EB Buyin (buy extra ball / front-door button, keyFront "2").
       addTouchRegion(RECT { 33, 0, 67, 10 }, GetExtraBallBuyInActionId());
@@ -75,6 +76,17 @@ InputManager::InputManager()
       addTouchRegion(RECT { 30, 60, 70, 90 }, GetCenterNudgeActionId());
       addTouchRegion(RECT { 70, 60, 100, 90 }, GetRightFlipperActionId());
       addTouchRegion(RECT { 70, 60, 100, 90 }, GetStagedRightFlipperActionId());
+      if (oneHandedFlippers)
+      {
+         // One-handed accessibility: each flipper zone also fires the opposite
+         // flipper (and its staged variant). Each extra registration gets its
+         // own direct-state slot and the action ORs all slots, so overlapping
+         // holds across both zones press/release cleanly.
+         addTouchRegion(RECT { 0, 60, 30, 90 }, GetRightFlipperActionId());
+         addTouchRegion(RECT { 0, 60, 30, 90 }, GetStagedRightFlipperActionId());
+         addTouchRegion(RECT { 70, 60, 100, 90 }, GetLeftFlipperActionId());
+         addTouchRegion(RECT { 70, 60, 100, 90 }, GetStagedLeftFlipperActionId());
+      }
       addTouchRegion(RECT { 0, 90, 30, 100 }, GetStartActionId());
       // Centre-bottom action/lockbar button (engine action "Lockbar", script LockbarKey), sits between Start and Launch.
       addTouchRegion(RECT { 30, 90, 70, 100 }, GetLockbarActionId());

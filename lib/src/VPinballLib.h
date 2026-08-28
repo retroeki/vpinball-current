@@ -147,6 +147,10 @@ public:
    float GetViewY();
    VPINBALL_STATUS SetViewZ(float z);   // Camera Z position in cm
    float GetViewZ();
+   VPINBALL_STATUS SetViewScaleX(float scaleX);   // Scene scale along playfield width axis (0.5-1.5)
+   float GetViewScaleX();
+   VPINBALL_STATUS SetViewScaleY(float scaleY);   // Scene scale along playfield depth axis (0.5-1.5)
+   float GetViewScaleY();
    string GetTableName();
    string GetTableVersion();
    VPINBALL_VIEW_MODE GetViewMode();

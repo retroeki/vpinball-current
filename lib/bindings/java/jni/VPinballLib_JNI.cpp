@@ -449,6 +449,26 @@ JNIEXPORT jfloat JNICALL Java_org_vpinball_app_jni_VPinballJNI_VPinballGetViewZ(
    return VPinballGetViewZ();
 }
 
+JNIEXPORT jint JNICALL Java_org_vpinball_app_jni_VPinballJNI_VPinballSetViewScaleX(JNIEnv* env, jobject obj, jfloat scaleX)
+{
+   return VPinballSetViewScaleX(scaleX);
+}
+
+JNIEXPORT jfloat JNICALL Java_org_vpinball_app_jni_VPinballJNI_VPinballGetViewScaleX(JNIEnv* env, jobject obj)
+{
+   return VPinballGetViewScaleX();
+}
+
+JNIEXPORT jint JNICALL Java_org_vpinball_app_jni_VPinballJNI_VPinballSetViewScaleY(JNIEnv* env, jobject obj, jfloat scaleY)
+{
+   return VPinballSetViewScaleY(scaleY);
+}
+
+JNIEXPORT jfloat JNICALL Java_org_vpinball_app_jni_VPinballJNI_VPinballGetViewScaleY(JNIEnv* env, jobject obj)
+{
+   return VPinballGetViewScaleY();
+}
+
 JNIEXPORT jint JNICALL Java_org_vpinball_app_jni_VPinballJNI_VPinballGetViewMode(JNIEnv* env, jobject obj)
 {
    return VPinballGetViewMode();

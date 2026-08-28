@@ -1433,6 +1433,58 @@ float VPinballLib::GetViewZ()
    return VPUTOCM(viewSetup.mViewZ);
 }
 
+VPINBALL_STATUS VPinballLib::SetViewScaleX(float scaleX)
+{
+   if (!g_pplayer || !g_pplayer->m_ptable || !g_pplayer->m_renderer)
+      return VPINBALL_STATUS_FAILURE;
+
+   // Same bounds as the ViewDTScaleX/ViewFSSScaleX table-override settings
+   scaleX = clamp(scaleX, 0.5f, 1.5f);
+
+   ViewSetup& viewSetup = g_pplayer->m_ptable->GetViewSetup();
+   viewSetup.mSceneScaleX = scaleX;
+
+   g_pplayer->m_renderer->DisableStaticPrePass(true);
+   g_pplayer->m_renderer->InitLayout();
+
+   return VPINBALL_STATUS_SUCCESS;
+}
+
+float VPinballLib::GetViewScaleX()
+{
+   if (!g_pplayer || !g_pplayer->m_ptable)
+      return 1.0f;
+
+   const ViewSetup& viewSetup = g_pplayer->m_ptable->GetViewSetup();
+   return viewSetup.mSceneScaleX;
+}
+
+VPINBALL_STATUS VPinballLib::SetViewScaleY(float scaleY)
+{
+   if (!g_pplayer || !g_pplayer->m_ptable || !g_pplayer->m_renderer)
+      return VPINBALL_STATUS_FAILURE;
+
+   // Same bounds as the ViewDTScaleY/ViewFSSScaleY table-override settings
+   scaleY = clamp(scaleY, 0.5f, 1.5f);
+
+   ViewSetup& viewSetup = g_pplayer->m_ptable->GetViewSetup();
+   viewSetup.mSceneScaleY = scaleY;
+
+   g_pplayer->m_renderer->DisableStaticPrePass(true);
+   g_pplayer->m_renderer->InitLayout();
+
+   return VPINBALL_STATUS_SUCCESS;
+}
+
+float VPinballLib::GetViewScaleY()
+{
+   if (!g_pplayer || !g_pplayer->m_ptable)
+      return 1.0f;
+
+   const ViewSetup& viewSetup = g_pplayer->m_ptable->GetViewSetup();
+   return viewSetup.mSceneScaleY;
+}
+
 string VPinballLib::GetTableName()
 {
    if (!g_pplayer || !g_pplayer->m_ptable)
