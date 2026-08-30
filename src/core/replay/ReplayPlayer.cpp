@@ -64,6 +64,13 @@ ReplayPlayer::ReplayPlayer(Player *player, const std::string &path)
          m_windowStartMs = m_data.GetFirstMs();
          m_windowEndMs = m_data.GetLastMs();
       }
+      // The PinMAME ROM slider is a dB gain that live playback applies through
+      // the audio engine (Player::UpdateVolume -> SetPluginStreamGain). The
+      // export mixer bypasses the engine entirely, so read it here and apply it
+      // by hand. Otherwise a user who raised the slider to fix quiet ROM audio
+      // hears the boost in-game and nothing at all in their exported clip.
+      m_romExportGain = powf(10.0f, (float)settings.GetPlayer_PinmameVolume() / 20.0f);
+
       if (m_exportMode)
       {
          PLOGI << "ReplayPlayer: EXPORT mode, window " << m_windowStartMs << ".." << m_windowEndMs << "ms at " << fps << "fps (clean render; the app burns overlays)";
@@ -92,6 +99,14 @@ ReplayPlayer::~ReplayPlayer()
 namespace
 {
 constexpr uint32_t MIX_RATE = 44100;
+
+// Live, a ROM stream is mono and miniaudio duplicates it to both speakers, so
+// what a listener hears is 2x the sample value; the recorder meanwhile stores
+// the AVERAGE of the source channels (ReplayRecorder::OnRomAudio). Table SFX
+// are already placed at their live two-speaker sum by the busGain below, so
+// without this factor ROM audio lands exactly 6 dB under everything else --
+// the "ROM is quiet, table sounds are fine" report.
+constexpr float ROM_MONO_SPREAD = 2.f;
 
 // One scheduled playback of a table sound, reconstructed from the recorded
 // PlaySound/StopSound events. Volume changes without restart (the standard
@@ -342,6 +357,10 @@ void ReplayPlayer::DumpExportAudio(const std::string &path) const
 
    // --- ROM audio: every stream, sequential per key with block timestamps
    // re-anchoring on drift, resampled to the mix rate, block volume applied
+   // Match what a listener actually hears live: the two-speaker spread the
+   // recorder averaged away, and the PinMAME dB slider the audio engine would
+   // have applied.
+   const float romGain = ROM_MONO_SPREAD * m_romExportGain;
    std::map<uint8_t, double> romPos; // next out-sample position per stream key
    for (const auto &b : blocks)
    {
@@ -364,7 +383,7 @@ void ReplayPlayer::DumpExportAudio(const std::string &path) const
          if (s0 + 1 >= b.samples.size())
             break;
          const float frac = (float)(src - (double)s0);
-         mix[i] += b.volume * ((float)b.samples[s0] * (1.f - frac) + (float)b.samples[s0 + 1] * frac) * (1.f / 32768.f);
+         mix[i] += romGain * b.volume * ((float)b.samples[s0] * (1.f - frac) + (float)b.samples[s0 + 1] * frac) * (1.f / 32768.f);
       }
       romPos[b.key] = pos + nOut;
    }

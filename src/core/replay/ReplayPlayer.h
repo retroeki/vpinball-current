@@ -78,6 +78,11 @@ private:
    uint32_t m_windowStartMs = 0, m_windowEndMs = 0;
    bool m_finished = false;
 
+   // Linear gain for the PinMAME ROM slider, mirrored into the export mix.
+   // Live playback gets this from AudioPlayer::SetPluginStreamGain; the offline
+   // mixer has no audio engine, so it has to apply the value itself.
+   float m_romExportGain = 1.f;
+
    struct LiveBall
    {
       HitBall *hitBall = nullptr;
