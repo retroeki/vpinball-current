@@ -362,12 +362,21 @@ HRESULT BiffReader::GetWideString(WCHAR *wzvalue, const size_t wzvalue_maxlength
    hr = ReadBytes(tmp, len);
    tmp[len/sizeof(WCHAR)] = L'\0';
 #else
-   WCHAR * tmp = new WCHAR[len/2+1];
-   memset(tmp, 0, (len/2+1) * sizeof(WCHAR));
-   char* ptr = (char*)tmp;
-   for (int index = 0; index < len/2; index++) {
-      hr = ReadBytes(ptr, 2);
-      ptr += sizeof(WCHAR);
+   // The stream stores UTF-16 but WCHAR is wchar_t (4 bytes) here, so every
+   // character has to be widened. This used to issue one ReadBytes per
+   // character, and each of those pulled a whole block from the underlying
+   // storage — a 20-character name cost 20 block reads. Read the payload in a
+   // single call, then widen in memory.
+   const int chars = len/2;
+   WCHAR * tmp = new WCHAR[chars+1];
+   memset(tmp, 0, (chars+1) * sizeof(WCHAR));
+   if (chars > 0)
+   {
+      uint16_t * const raw = new uint16_t[chars];
+      hr = ReadBytes(raw, chars*2);
+      for (int index = 0; index < chars; index++)
+         tmp[index] = (WCHAR)raw[index];
+      delete[] raw;
    }
 #endif
    wcsncpy_s(wzvalue, wzvalue_maxlength, tmp);
@@ -393,12 +402,18 @@ HRESULT BiffReader::GetWideString(std::basic_string<WCHAR>& wzvalue)
    hr = ReadBytes(tmp, len);
    tmp[len/sizeof(WCHAR)] = L'\0';
 #else
-   WCHAR * tmp = new WCHAR[len/2+1];
-   memset(tmp, 0, (len/2+1) * sizeof(WCHAR));
-   char* ptr = (char*)tmp;
-   for (int index = 0; index < len/2; index++) {
-      hr = ReadBytes(ptr, 2);
-      ptr += sizeof(WCHAR);
+   // See the note in the WCHAR* overload above: one ReadBytes for the whole
+   // string, then widen UTF-16 into wchar_t in memory.
+   const int chars = len/2;
+   WCHAR * tmp = new WCHAR[chars+1];
+   memset(tmp, 0, (chars+1) * sizeof(WCHAR));
+   if (chars > 0)
+   {
+      uint16_t * const raw = new uint16_t[chars];
+      hr = ReadBytes(raw, chars*2);
+      for (int index = 0; index < chars; index++)
+         tmp[index] = (WCHAR)raw[index];
+      delete[] raw;
    }
 #endif
    wzvalue = tmp;

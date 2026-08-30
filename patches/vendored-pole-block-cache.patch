@@ -1,0 +1,130 @@
+POLE big-block read cache (re-apply after ANY re-fetch of third-party/include/pole)
+===================================================================================
+
+third-party/* is gitignored (.gitignore:20), so third-party/include/pole/pole.cpp is
+NOT tracked by git even though it IS compiled into libvpinball.so
+(make/CMakeLists_common_standalone.txt). Any re-provision of third-party/ silently
+wipes the change below. This file is the durable copy. Same failure mode that lost
+the vendored-pinmame fixes once already - see vendored-pinmame-android-fixes.patch.
+
+Why:
+  VPX reads a .vpx (an MS-CFB compound document) through POLE. StreamIO::read()
+  fetches one whole big block (4096 bytes) per call and keeps NO positional cache,
+  while BiffReader consumes records two to four bytes at a time. So reading a single
+  4-byte BIFF token costs a full seek + read(4096) syscall, and the NEXT token in the
+  same block costs another one. POLE ships a read cache (CACHEBUFSIZE, ~line 66) but
+  it is only wired to getch(), which VPX never calls.
+
+  On internal storage this is invisible. On an SD card (high random-read latency) it
+  dominates table load: a 627-directory-entry table measured 5.44 s in the GameItem
+  stage alone, on a device where the same table is near-instant from internal storage.
+
+What this does:
+  Adds a one-block cache to StorageIO, consulted by loadBigBlock(). Repeat reads of
+  the same block are served with a memcpy instead of a syscall. Only whole-block
+  reads populate it, so a short read at EOF can never satisfy a later longer request.
+  Invalidated in saveBigBlocks() (any write may land on the cached block) and in
+  close(). Freed in ~StorageIO().
+
+  Safe w.r.t. threading as it stands: PoleStorage::OpenStream() clones an entire
+  POLE::Storage per stream (standalone/PoleStorage.cpp:27-30, 71-88), so each
+  StorageIO is driven by one thread. If that per-stream cloning is ever removed to
+  save the repeated re-parse, this cache needs a lock or thread-local storage.
+
+Apply from the vpinball repo root:
+  patch -p1 < patches/vendored-pole-block-cache.patch
+
+Verify it is present after any third-party re-fetch:
+  grep -c cacheBlock third-party/include/pole/pole.cpp   # expect 4
+
+--- a/third-party/include/pole/pole.cpp
++++ b/third-party/include/pole/pole.cpp
+@@ -196,6 +196,12 @@
+     std::vector<uint64> mbat_data; // the additional indices to big blocks
+     bool mbatDirty;           // If true, mbat_blocks need to be written
+ 
++    // Most recently read big block, kept so repeated reads inside one block do
++    // not each become a seek+read syscall. See loadBigBlock().
++    unsigned char* cacheData; // blockSize bytes, allocated on first use
++    uint64 cacheBlock;        // block index held in cacheData
++    uint64 cacheLen;          // valid bytes in cacheData (0 = empty)
++
+     std::list<Stream*> streams;
+ 
+     StorageIO( Storage* storage, const char* filename );
+@@ -1241,6 +1247,9 @@
+   mbat_blocks(),
+   mbat_data(),
+   mbatDirty(),
++  cacheData(nullptr),
++  cacheBlock(0),
++  cacheLen(0),
+   streams()
+ {
+   bbat->blockSize = (uint64) 1 << header->b_shift;
+@@ -1250,6 +1259,7 @@
+ StorageIO::~StorageIO()
+ {
+   if( opened ) close();
++  delete[] cacheData;
+   delete sbat;
+   delete bbat;
+   delete dirtree;
+@@ -1485,7 +1495,7 @@
+ 
+   file.close();
+   opened = false;
+-
++  cacheLen = 0;
+ 
+   std::list<Stream*>::iterator it;
+   for( it = streams.begin(); it != streams.end(); ++it )
+@@ -1613,12 +1623,37 @@
+   fileCheck(file);
+   if( !file.good() ) return 0;
+ 
++  // Serve a repeat read of the same block from memory. StreamIO::read() pulls
++  // a whole block per call while VPX consumes BIFF records two to four bytes
++  // at a time, so the same block is re-requested dozens of times in a row;
++  // without this each repeat is another seek+read syscall. That is invisible
++  // on internal storage and dominates table load time on high-latency media
++  // such as SD cards.
++  // Only whole-block reads populate the cache, so a short read can never be
++  // used to satisfy a later, longer request for the same block.
++  if( cacheData && cacheLen > 0 && cacheBlock == block )
++  {
++    const uint64 n = ( maxlen < cacheLen ) ? maxlen : cacheLen;
++    memcpy( data, cacheData, (size_t) n );
++    return n;
++  }
++
+   // wraps call for loadBigBlocks
+   std::vector<uint64> blocks;
+   blocks.resize( 1 );
+   blocks[ 0 ] = block;
+ 
+-  return loadBigBlocks( blocks, data, maxlen );
++  const uint64 bytes = loadBigBlocks( blocks, data, maxlen );
++
++  if( bytes > 0 && maxlen >= bbat->blockSize )
++  {
++    if( !cacheData ) cacheData = new unsigned char[ (size_t) bbat->blockSize ];
++    memcpy( cacheData, data, (size_t) bytes );
++    cacheBlock = block;
++    cacheLen = bytes;
++  }
++
++  return bytes;
+ }
+ 
+ uint64 StorageIO::saveBigBlocks( std::vector<uint64> blocks, uint64 offset, unsigned char* data, uint64 len )
+@@ -1630,6 +1665,9 @@
+   if( blocks.size() < 1 ) return 0;
+   if( len == 0 ) return 0;
+ 
++  // Any write can land on the cached block, so drop it rather than track which.
++  cacheLen = 0;
++
+   // write block one by one, seems fast enough
+   uint64 bytes = 0;
+   for( unsigned int i=0; (i < blocks.size() ) & ( bytes<len ); i++ )
