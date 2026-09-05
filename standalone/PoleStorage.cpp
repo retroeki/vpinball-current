@@ -11,6 +11,7 @@ HRESULT PoleStorage::Create(const string& szFilename, const string& szName, ISto
       pStg->m_szFilename = szFilename;
       pStg->m_szPath = szName;
       pStg->m_pPOLEStorage = pPOLEStorage;
+      pStg->m_pMutex = std::make_shared<std::mutex>();
 
       pStg->AddRef();
 
@@ -24,9 +25,21 @@ HRESULT PoleStorage::Create(const string& szFilename, const string& szName, ISto
    return STG_E_FILENOTFOUND;
 }
 
-HRESULT PoleStorage::Clone(PoleStorage* pPoleStorage, IStorage** ppstg)
+HRESULT PoleStorage::Share(PoleStorage* pParent, const string& szName, IStorage** ppstg)
 {
-   return PoleStorage::Create(pPoleStorage->m_szFilename, pPoleStorage->m_szPath, ppstg);
+   PoleStorage* pStg = new PoleStorage();
+   pStg->m_szFilename = pParent->m_szFilename;
+   pStg->m_szPath = szName;
+   pStg->m_pPOLEStorage = pParent->m_pPOLEStorage;
+   pStg->m_pMutex = pParent->m_pMutex;
+   pStg->m_pParent = pParent;
+
+   pParent->AddRef();
+   pStg->AddRef();
+
+   *ppstg = pStg;
+
+   return S_OK;
 }
 
 HRESULT PoleStorage::StreamExists(const string& szName)
@@ -48,17 +61,20 @@ STDMETHODIMP PoleStorage::QueryInterface(REFIID iid, void **ppvObjOut) { return 
 
 STDMETHODIMP_(ULONG) PoleStorage::AddRef()
 {
-   m_dwRef++;
-
-   return m_dwRef;
+   return ++m_dwRef;
 }
 
 STDMETHODIMP_(ULONG) PoleStorage::Release()
 {
-   ULONG dwRef = --m_dwRef;
+   const ULONG dwRef = --m_dwRef;
 
    if (dwRef == 0) {
-      delete m_pPOLEStorage;
+      // Only the root owns the parsed document; a sub-storage just drops the
+      // reference that was keeping the root alive.
+      if (m_pParent)
+         m_pParent->Release();
+      else
+         delete m_pPOLEStorage;
 
       delete this;
    }
@@ -70,19 +86,21 @@ STDMETHODIMP PoleStorage::CreateStream(LPCOLESTR pwcsName, DWORD grfMode, DWORD 
 
 STDMETHODIMP PoleStorage::OpenStream(LPCOLESTR pwcsName, void *reserved1, DWORD grfMode, DWORD reserved2, IStream **ppstm)
 {
-   HRESULT hr;
-   PoleStorage* pStg;
-
    char szName[1024];
    WideCharToMultiByte(CP_ACP, 0, pwcsName, -1, szName, sizeof(szName), NULL, NULL);
 
-   if (SUCCEEDED(hr = PoleStorage::Clone(this, (IStorage**)&pStg))) {
-      if (SUCCEEDED(hr = pStg->StreamExists(szName)))
-         hr = PoleStream::Create(pStg, szName, ppstm);
+   // Resolving the entry and building the stream's block chain both read the
+   // shared document, so they happen under the lock. PoleStream::Create must
+   // therefore NOT take it again.
+   std::lock_guard<std::mutex> lock(*m_pMutex);
 
-      if (FAILED(hr))
-         pStg->Release();
-   }
+   HRESULT hr;
+   if (FAILED(hr = StreamExists(szName)))
+      return hr;
+
+   AddRef(); // the stream holds a reference to us for its lifetime
+   if (FAILED(hr = PoleStream::Create(this, szName, ppstm)))
+      Release();
 
    return hr;
 }
@@ -94,7 +112,9 @@ STDMETHODIMP PoleStorage::OpenStorage(LPCOLESTR pwcsName, IStorage *pstgPriority
    char szName[1024];
    WideCharToMultiByte(CP_ACP, 0, pwcsName, -1, szName, sizeof(szName), NULL, NULL);
 
-   return Create(m_szFilename, szName, ppstg);
+   // Same document, different path prefix. This used to re-open and re-parse
+   // the whole file just to address a sub-storage.
+   return Share(this, szName, ppstg);
 }
 
 STDMETHODIMP PoleStorage::CopyTo(DWORD ciidExclude, const IID *rgiidExclude, SNB snbExclude, IStorage *pstgDest) { return E_NOTIMPL; }

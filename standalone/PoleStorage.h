@@ -3,17 +3,28 @@
 #include "objidl.h"
 #include "pole/pole.h"
 
+#include <atomic>
+#include <memory>
+#include <mutex>
 #include <string>
 using std::string;
 
 class PoleStorage : public IStorage {
 public:
    static HRESULT Create(const string& szFilename, const string& szName, IStorage** ppstg);
-   static HRESULT Clone(PoleStorage* pPoleStorage, IStorage** ppstg);
+   // Sub-storage over the SAME parsed document. Replaces the old Clone(), which
+   // re-opened the file and re-parsed header/FAT/MiniFAT/directory from scratch.
+   static HRESULT Share(PoleStorage* pParent, const string& szName, IStorage** ppstg);
 
    HRESULT StreamExists(const string& szName);
    POLE::Storage* getPOLEStorage();
    string getPath();
+
+   // POLE has no locking of its own and a StorageIO owns ONE file position, so
+   // two threads inside it would interleave their seeks and reads. Every entry
+   // into the shared document is serialized on this mutex, which is shared by
+   // the whole storage/stream tree. Held by the shim, never inside POLE.
+   const std::shared_ptr<std::mutex>& getMutex() const { return m_pMutex; }
 
    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **ppvObject);
    ULONG STDMETHODCALLTYPE AddRef();
@@ -36,9 +47,15 @@ public:
    STDMETHOD(Stat)(STATSTG *pstatstg, DWORD grfStatFlag);
 
 private:
+  // Shared by the whole tree. A table has thousands of streams and each one
+  // used to get its own parsed copy of this.
   POLE::Storage* m_pPOLEStorage = nullptr;
+  // Non-null on a sub-storage: holds the owner alive and marks us a borrower,
+  // so only the root deletes the document.
+  PoleStorage* m_pParent = nullptr;
+  std::shared_ptr<std::mutex> m_pMutex;
   string m_szFilename;
   string m_szPath;
 
-  ULONG m_dwRef = 0;
+  std::atomic<ULONG> m_dwRef { 0 };
 };

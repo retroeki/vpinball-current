@@ -6,6 +6,7 @@ HRESULT PoleStream::Create(PoleStorage* pStorage, const string& szName, IStream*
    PoleStream* pStm = new PoleStream();
    pStm->m_pPOLEStream = new POLE::Stream(pStorage->getPOLEStorage(), pStorage->getPath() + '/' + szName);
    pStm->m_pStorage = pStorage;
+   pStm->m_pMutex = pStorage->getMutex();
 
    pStm->AddRef();
 
@@ -18,20 +19,22 @@ STDMETHODIMP PoleStream::QueryInterface(REFIID iid, void **ppvObjOut) { return E
 
 STDMETHODIMP_(ULONG) PoleStream::AddRef()
 {
-   m_dwRef++;
-
-   return m_dwRef;
+   return ++m_dwRef;
 }
 
 STDMETHODIMP_(ULONG) PoleStream::Release()
 {
-   ULONG dwRef = --m_dwRef;
+   const ULONG dwRef = --m_dwRef;
 
    if (dwRef == 0) {
-      delete m_pPOLEStream;
-
+      {
+         std::lock_guard<std::mutex> lock(*m_pMutex);
+         delete m_pPOLEStream;
+      }
+      // Outside the lock: this can destroy the storage, and with it the only
+      // other owner of the mutex we were just holding.
       m_pStorage->Release();
-   
+
       delete this;
    }
 
@@ -40,6 +43,8 @@ STDMETHODIMP_(ULONG) PoleStream::Release()
 
 STDMETHODIMP PoleStream::Seek(LARGE_INTEGER dlibMove, DWORD dwOrigin, ULARGE_INTEGER *plibNewPosition)
 {
+   std::lock_guard<std::mutex> lock(*m_pMutex);
+
    if (dwOrigin == STREAM_SEEK_SET)
       m_pPOLEStream->seek(dlibMove.QuadPart);
    else if (dwOrigin == STREAM_SEEK_CUR)
@@ -57,6 +62,8 @@ STDMETHODIMP PoleStream::UnlockRegion(ULARGE_INTEGER libOffset, ULARGE_INTEGER c
 
 STDMETHODIMP PoleStream::Stat(STATSTG *pstatstg, DWORD grfStatFlag)
 {
+   std::lock_guard<std::mutex> lock(*m_pMutex);
+
    pstatstg->cbSize.LowPart = m_pPOLEStream->size();
    return S_OK;
 }
@@ -65,6 +72,8 @@ STDMETHODIMP PoleStream::Clone(IStream **ppstm) { return E_NOTIMPL; }
 
 STDMETHODIMP PoleStream::Read(void *pv, ULONG cb, ULONG *pcbRead)
 {
+   std::lock_guard<std::mutex> lock(*m_pMutex);
+
    *pcbRead = m_pPOLEStream->read((unsigned char*)pv, cb);
    return S_OK;
 }

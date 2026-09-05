@@ -26,16 +26,36 @@ What this does:
   Invalidated in saveBigBlocks() (any write may land on the cached block) and in
   close(). Freed in ~StorageIO().
 
-  Safe w.r.t. threading as it stands: PoleStorage::OpenStream() clones an entire
-  POLE::Storage per stream (standalone/PoleStorage.cpp:27-30, 71-88), so each
-  StorageIO is driven by one thread. If that per-stream cloning is ever removed to
-  save the repeated re-parse, this cache needs a lock or thread-local storage.
+  Truncated files: a block whose FAT entry points past end of file makes
+  loadBigBlocks() return a wrapped, huge count. The bytes <= blockSize guard keeps
+  that out of the cache; without it the memcpy into cacheData segfaults where stock
+  POLE merely returned garbage for that block (verified 2026-09-05 on a 200 MB
+  truncation of Fathom 3.0.3: segfault before, clean read after).
+
+  Thread safety: PoleStorage::OpenStream() originally cloned an entire
+  POLE::Storage per stream, which gave every thread its own StorageIO and its own
+  file handle. That cloning has since been removed (one parsed document is now
+  shared by the whole storage/stream tree), so this cache IS shared across
+  threads. It is protected because the shim serializes every entry into POLE on
+  PoleStorage's mutex - see standalone/PoleStorage.h getMutex(). Do NOT introduce
+  a POLE call path that bypasses that lock.
 
 Apply from the vpinball repo root:
   patch -p1 < patches/vendored-pole-block-cache.patch
 
 Verify it is present after any third-party re-fetch:
-  grep -c cacheBlock third-party/include/pole/pole.cpp   # expect 4
+  grep -c cacheBlock third-party/include/pole/pole.cpp                 # expect 4
+  grep -c "bytes <= bbat->blockSize" third-party/include/pole/pole.cpp # expect 1 (truncation guard)
+  patch -R -p1 --dry-run < patches/vendored-pole-block-cache.patch     # must apply cleanly = file matches this patch
+
+History:
+  2026-08-30  one-block read cache (commit bf7b99b). Per-stream POLE::Storage clone
+              made it per-thread by construction.
+  2026-08-30  PoleStorage::Share replaces Clone: one parsed document per table, all
+              POLE entry points serialized on PoleStorage::m_pMutex. Thread-safety
+              paragraph above rewritten accordingly.
+  2026-09-05  bytes <= blockSize guard before caching (truncated-file segfault).
+              Round-trip verified: patch -R then patch reproduces pole.cpp byte for byte.
 
 --- a/third-party/include/pole/pole.cpp
 +++ b/third-party/include/pole/pole.cpp
@@ -79,7 +99,7 @@ Verify it is present after any third-party re-fetch:
  
    std::list<Stream*>::iterator it;
    for( it = streams.begin(); it != streams.end(); ++it )
-@@ -1613,12 +1623,37 @@
+@@ -1613,12 +1623,40 @@
    fileCheck(file);
    if( !file.good() ) return 0;
  
@@ -88,7 +108,8 @@ Verify it is present after any third-party re-fetch:
 +  // at a time, so the same block is re-requested dozens of times in a row;
 +  // without this each repeat is another seek+read syscall. That is invisible
 +  // on internal storage and dominates table load time on high-latency media
-+  // such as SD cards.
++  // such as SD cards. One StorageIO now backs every stream of a table, so this
++  // also caches across streams; PoleStorage's mutex serializes all access.
 +  // Only whole-block reads populate the cache, so a short read can never be
 +  // used to satisfy a later, longer request for the same block.
 +  if( cacheData && cacheLen > 0 && cacheBlock == block )
@@ -106,7 +127,9 @@ Verify it is present after any third-party re-fetch:
 -  return loadBigBlocks( blocks, data, maxlen );
 +  const uint64 bytes = loadBigBlocks( blocks, data, maxlen );
 +
-+  if( bytes > 0 && maxlen >= bbat->blockSize )
++  // A FAT chain that points past end of file (truncated download) makes
++  // loadBigBlocks() return a wrapped, huge count: never let that reach memcpy.
++  if( bytes > 0 && bytes <= bbat->blockSize && maxlen >= bbat->blockSize )
 +  {
 +    if( !cacheData ) cacheData = new unsigned char[ (size_t) bbat->blockSize ];
 +    memcpy( cacheData, data, (size_t) bytes );
@@ -118,7 +141,7 @@ Verify it is present after any third-party re-fetch:
  }
  
  uint64 StorageIO::saveBigBlocks( std::vector<uint64> blocks, uint64 offset, unsigned char* data, uint64 len )
-@@ -1630,6 +1665,9 @@
+@@ -1630,6 +1668,9 @@
    if( blocks.size() < 1 ) return 0;
    if( len == 0 ) return 0;
  
