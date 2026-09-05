@@ -22,6 +22,11 @@ std::shared_ptr<Sampler> TextureManager::LoadTexture(ITexManCacheable* const mem
    else
    {
       MapEntry& entry = it->second;
+      if (entry.tex != memtex)
+      {
+         PLOGE << "Texture cache key collision: '" << memtex->GetName() << "' shares key " << hash << " with '"
+               << (entry.tex ? entry.tex->GetName() : string("?")) << "' and will render its image";
+      }
       std::shared_ptr<Sampler>& sampler = force_linear_rgb ? entry.linearSampler : entry.sampler;
       if (entry.pendingUpload)
       {
@@ -50,6 +55,11 @@ void TextureManager::AddPendingUpload(ITexManCacheable* memtex)
       entry.pendingUpload = memtex->GetRawBitmap(false, 0);
       entry.tex = memtex;
       m_map[memtex->GetLiveHash()] = entry;
+   }
+   else if (it->second.tex != memtex)
+   {
+      PLOGE << "Texture cache key collision: upload of '" << memtex->GetName() << "' skipped, key " << memtex->GetLiveHash()
+            << " already held by '" << (it->second.tex ? it->second.tex->GetName() : string("?")) << "'";
    }
 }
 

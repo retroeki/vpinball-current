@@ -15,6 +15,19 @@
 
 #include "utils/lzwreader.h"
 
+#include <atomic>
+
+// Unique key for TextureManager::m_map. This used to be this ^ ppb ^ usec() ^ w ^ h,
+// which is a hash, not an identity: two same-size textures created close together
+// could collide, after which both objects were handed the first one's GPU texture
+// (seen as a drop-target face painted over its shadow flasher on Fathom). Same fix
+// as upstream vpinball fb2a96a61.
+static uint64_t NextLiveHash()
+{
+   static std::atomic<uint64_t> s_counter { 1 };
+   return s_counter.fetch_add(1, std::memory_order_relaxed);
+}
+
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_JPEG // only use the SSE2-JPG path from stbi, as all others are not faster than FreeImage //!! can remove stbi again if at some point FreeImage incorporates libjpeg-turbo or something similar
 #define STBI_NO_STDIO
@@ -663,7 +676,7 @@ BaseTexture::BaseTexture(const unsigned int w, const unsigned int h, const Forma
    , m_format(format)
    , m_width(w)
    , m_height(h)
-   , m_liveHash(((uint64_t)this) ^ usec() ^ ((uint64_t)w << 16) ^ ((uint64_t)h << 32) ^ format)
+   , m_liveHash(NextLiveHash())
    , m_data(reinterpret_cast<uint8_t*>(SDL_aligned_alloc(16, w * h * GetPixelSize(format))))
 {
 }
@@ -1661,7 +1674,7 @@ Texture::Texture(string name, PinBinary* ppb, unsigned int width, unsigned int h
    , m_width(width)
    , m_height(height)
    , m_ppb(ppb)
-   , m_liveHash(((uint64_t)this) ^ ((uint64_t)ppb) ^ usec() ^ ((uint64_t)width << 16) ^ ((uint64_t)height << 32))
+   , m_liveHash(NextLiveHash())
 {
    assert(m_ppb != nullptr);
    assert(m_width > 0);
