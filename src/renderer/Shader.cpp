@@ -267,6 +267,8 @@ Shader::TechniqueDef Shader::shaderTechniqueNames[SHADER_TECHNIQUE_COUNT] {
    SHADER_TECHNIQUE(fb_bloom, SHADER_w_h_height, SHADER_tex_fb_filtered),
    SHADER_TECHNIQUE(fb_mirror, SHADER_w_h_height, SHADER_tex_fb_unfiltered),
    SHADER_TECHNIQUE(fb_copy, SHADER_w_h_height, SHADER_tex_fb_filtered),
+   SHADER_TECHNIQUE(fb_copy_depth, SHADER_w_h_height, SHADER_tex_fb_filtered, SHADER_tex_depth), // static prepass composite: colour + depth copy (non stereo)
+   SHADER_TECHNIQUE(fb_sgsr, SHADER_w_h_height, SHADER_tex_fb_filtered), // Snapdragon Game Super Resolution 1 spatial upscaler (non stereo)
    SHADER_TECHNIQUE(SSReflection, SHADER_w_h_height, SHADER_SSR_bumpHeight_fresnelRefl_scale_FS, SHADER_tex_fb_filtered, SHADER_tex_depth, SHADER_tex_ao_dither),
 
    SHADER_TECHNIQUE(NFAA, SHADER_w_h_height, SHADER_tex_fb_filtered, SHADER_tex_depth),
@@ -1401,6 +1403,17 @@ void Shader::Load()
       BGFX_EMBEDDED_SHADER_ST_CLIP(fs_unshaded_notex_ballshadow),
       BGFX_EMBEDDED_SHADER_ST_CLIP(fs_unshaded_tex),
       BGFX_EMBEDDED_SHADER_ST_CLIP(fs_unshaded_tex_ballshadow),
+      // Lean unshaded path (non stereo): position-only vertex shader + matching fragment inputs
+      BGFX_EMBEDDED_SHADER(vs_unshaded_clip),
+      BGFX_EMBEDDED_SHADER(vs_unshaded_noclip),
+      BGFX_EMBEDDED_SHADER(fs_unshaded_lean_notex_clip),
+      BGFX_EMBEDDED_SHADER(fs_unshaded_lean_notex_noclip),
+      BGFX_EMBEDDED_SHADER(fs_unshaded_lean_notex_ballshadow_clip),
+      BGFX_EMBEDDED_SHADER(fs_unshaded_lean_notex_ballshadow_noclip),
+      BGFX_EMBEDDED_SHADER(fs_unshaded_lean_tex_clip),
+      BGFX_EMBEDDED_SHADER(fs_unshaded_lean_tex_noclip),
+      BGFX_EMBEDDED_SHADER(fs_unshaded_lean_tex_ballshadow_clip),
+      BGFX_EMBEDDED_SHADER(fs_unshaded_lean_tex_ballshadow_noclip),
       BGFX_EMBEDDED_SHADER(vs_vr_mask),
       // Ball shaders
       BGFX_EMBEDDED_SHADER_ST_CLIP(vs_ball),
@@ -1471,6 +1484,8 @@ void Shader::Load()
       BGFX_EMBEDDED_SHADER_ST(fs_pp_bloom),
       BGFX_EMBEDDED_SHADER_ST(fs_pp_mirror),
       BGFX_EMBEDDED_SHADER_ST(fs_pp_copy),
+      BGFX_EMBEDDED_SHADER(fs_pp_copy_depth),
+      BGFX_EMBEDDED_SHADER(fs_pp_sgsr),
       BGFX_EMBEDDED_SHADER_ST(fs_pp_ssr),
       BGFX_EMBEDDED_SHADER_ST(fs_pp_irradiance),
       // Motion Blur as post-processes
@@ -1530,10 +1545,12 @@ void Shader::Load()
       loadProgram(embeddedShaders, SHADER_TECHNIQUE_bg_decal_without_texture, STEREO(vs_basic_notex_noclip),         STEREO(fs_decal_notex_noclip));
       loadProgram(embeddedShaders, SHADER_TECHNIQUE_bg_decal_with_texture,    STEREO(vs_basic_tex_noclip),           STEREO(fs_decal_tex_noclip));
       loadProgram(embeddedShaders, SHADER_TECHNIQUE_kickerBoolean,            STEREO(vs_kicker_noclip),              STEREO(fs_basic_notex_noat_noclip));
-      loadProgram(embeddedShaders, SHADER_TECHNIQUE_unshaded_without_texture, STEREO(vs_basic_notex_noclip),         STEREO(fs_unshaded_notex_noclip));
-      loadProgram(embeddedShaders, SHADER_TECHNIQUE_unshaded_with_texture,    STEREO(vs_basic_tex_noclip),           STEREO(fs_unshaded_tex_noclip));
-      loadProgram(embeddedShaders, SHADER_TECHNIQUE_unshaded_without_texture_shadow, STEREO(vs_basic_notex_noclip),  STEREO(fs_unshaded_notex_ballshadow_noclip));
-      loadProgram(embeddedShaders, SHADER_TECHNIQUE_unshaded_with_texture_shadow, STEREO(vs_basic_tex_noclip),       STEREO(fs_unshaded_tex_ballshadow_noclip));
+      // Unshaded (additive/unlit) techniques: non-stereo builds use the lean vertex shader (position + texcoord only, see
+      // vs_unshaded.sc) with a fragment shader declaring just those inputs; stereo keeps the vs_basic pairing.
+      loadProgram(embeddedShaders, SHADER_TECHNIQUE_unshaded_without_texture, m_isStereo ? vs_basic_notex_noclip_st.name : "vs_unshaded_noclip", m_isStereo ? fs_unshaded_notex_noclip_st.name : "fs_unshaded_lean_notex_noclip");
+      loadProgram(embeddedShaders, SHADER_TECHNIQUE_unshaded_with_texture,    m_isStereo ? vs_basic_tex_noclip_st.name : "vs_unshaded_noclip",   m_isStereo ? fs_unshaded_tex_noclip_st.name : "fs_unshaded_lean_tex_noclip");
+      loadProgram(embeddedShaders, SHADER_TECHNIQUE_unshaded_without_texture_shadow, m_isStereo ? vs_basic_notex_noclip_st.name : "vs_unshaded_noclip", m_isStereo ? fs_unshaded_notex_ballshadow_noclip_st.name : "fs_unshaded_lean_notex_ballshadow_noclip");
+      loadProgram(embeddedShaders, SHADER_TECHNIQUE_unshaded_with_texture_shadow, m_isStereo ? vs_basic_tex_noclip_st.name : "vs_unshaded_noclip",    m_isStereo ? fs_unshaded_tex_ballshadow_noclip_st.name : "fs_unshaded_lean_tex_ballshadow_noclip");
       // Variants with a clipping plane
       loadProgram(embeddedShaders, SHADER_TECHNIQUE_basic_with_texture,       STEREO(vs_basic_tex_clip),           STEREO(fs_basic_tex_noat_clip), true);
       loadProgram(embeddedShaders, SHADER_TECHNIQUE_basic_with_texture_at,    STEREO(vs_basic_tex_clip),           STEREO(fs_basic_tex_at_clip), true);
@@ -1544,10 +1561,10 @@ void Shader::Load()
       loadProgram(embeddedShaders, SHADER_TECHNIQUE_bg_decal_without_texture, STEREO(vs_basic_notex_clip),         STEREO(fs_decal_notex_clip), true);
       loadProgram(embeddedShaders, SHADER_TECHNIQUE_bg_decal_with_texture,    STEREO(vs_basic_tex_clip),           STEREO(fs_decal_tex_clip), true);
       loadProgram(embeddedShaders, SHADER_TECHNIQUE_kickerBoolean,            STEREO(vs_kicker_clip),              STEREO(fs_basic_notex_noat_clip), true);
-      loadProgram(embeddedShaders, SHADER_TECHNIQUE_unshaded_without_texture, STEREO(vs_basic_notex_clip),         STEREO(fs_unshaded_notex_clip), true);
-      loadProgram(embeddedShaders, SHADER_TECHNIQUE_unshaded_with_texture,    STEREO(vs_basic_tex_clip),           STEREO(fs_unshaded_tex_clip), true);
-      loadProgram(embeddedShaders, SHADER_TECHNIQUE_unshaded_without_texture_shadow, STEREO(vs_basic_notex_clip),  STEREO(fs_unshaded_notex_ballshadow_clip), true);
-      loadProgram(embeddedShaders, SHADER_TECHNIQUE_unshaded_with_texture_shadow, STEREO(vs_basic_tex_clip),       STEREO(fs_unshaded_tex_ballshadow_clip), true);
+      loadProgram(embeddedShaders, SHADER_TECHNIQUE_unshaded_without_texture, m_isStereo ? vs_basic_notex_clip_st.name : "vs_unshaded_clip", m_isStereo ? fs_unshaded_notex_clip_st.name : "fs_unshaded_lean_notex_clip", true);
+      loadProgram(embeddedShaders, SHADER_TECHNIQUE_unshaded_with_texture,    m_isStereo ? vs_basic_tex_clip_st.name : "vs_unshaded_clip",   m_isStereo ? fs_unshaded_tex_clip_st.name : "fs_unshaded_lean_tex_clip", true);
+      loadProgram(embeddedShaders, SHADER_TECHNIQUE_unshaded_without_texture_shadow, m_isStereo ? vs_basic_notex_clip_st.name : "vs_unshaded_clip", m_isStereo ? fs_unshaded_notex_ballshadow_clip_st.name : "fs_unshaded_lean_notex_ballshadow_clip", true);
+      loadProgram(embeddedShaders, SHADER_TECHNIQUE_unshaded_with_texture_shadow, m_isStereo ? vs_basic_tex_clip_st.name : "vs_unshaded_clip",    m_isStereo ? fs_unshaded_tex_ballshadow_clip_st.name : "fs_unshaded_lean_tex_ballshadow_clip", true);
       // VR masking
       if (m_isStereo)
          loadProgram(embeddedShaders, SHADER_TECHNIQUE_vr_mask, "vs_vr_mask", "fs_unshaded_notex_noclip");
@@ -1650,6 +1667,9 @@ void Shader::Load()
       loadProgram(embeddedShaders, SHADER_TECHNIQUE_fb_bloom, STEREO(vs_postprocess), STEREO(fs_pp_bloom));
       loadProgram(embeddedShaders, SHADER_TECHNIQUE_fb_mirror, STEREO(vs_postprocess), STEREO(fs_pp_mirror));
       loadProgram(embeddedShaders, SHADER_TECHNIQUE_fb_copy, STEREO(vs_postprocess), STEREO(fs_pp_copy));
+      // Non-stereo techniques (their users are gated on STEREO_OFF); the stereo build maps them to the plain copy so the program table stays complete
+      loadProgram(embeddedShaders, SHADER_TECHNIQUE_fb_copy_depth, STEREO(vs_postprocess), m_isStereo ? fs_pp_copy_st.name : "fs_pp_copy_depth");
+      loadProgram(embeddedShaders, SHADER_TECHNIQUE_fb_sgsr, STEREO(vs_postprocess), m_isStereo ? fs_pp_copy_st.name : "fs_pp_sgsr");
       loadProgram(embeddedShaders, SHADER_TECHNIQUE_SSReflection, STEREO(vs_postprocess), STEREO(fs_pp_ssr));
       loadProgram(embeddedShaders, SHADER_TECHNIQUE_irradiance, STEREO(vs_postprocess), STEREO(fs_pp_irradiance));
 

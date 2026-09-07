@@ -2662,7 +2662,9 @@ RenderTarget* Renderer::ApplySharpening(RenderTarget* renderedRT, RenderTarget* 
 
 RenderTarget* Renderer::ApplyUpscaling(RenderTarget* renderedRT, RenderTarget* outputBackBuffer)
 {
-   if (m_renderWidth >= GetBackBufferTexture()->GetWidth())
+   // SGSR 1 spatial upscale of a frame rendered below the output resolution (same test as hasSgsrPass in RenderFrame)
+   const bool sgsr = (m_stereo3D == STEREO_OFF) && (m_renderWidth > GetBackBufferTexture()->GetWidth()) && (m_table->m_settings.GetPlayer_Upscaler() == 1);
+   if (!sgsr && m_renderWidth >= GetBackBufferTexture()->GetWidth())
       return renderedRT;
 
    // TODO add AMD FidelityFX Super Resolution (FSR) support
@@ -2678,9 +2680,18 @@ RenderTarget* Renderer::ApplyUpscaling(RenderTarget* renderedRT, RenderTarget* o
    assert(outputRT != renderedRT);
    m_renderDevice->SetRenderTarget("Upscale"s, outputRT, false);
    m_renderDevice->AddRenderTargetDependency(renderedRT);
-   m_renderDevice->m_FBShader->SetTexture(SHADER_tex_fb_filtered, renderedRT->GetColorSampler());
-   m_renderDevice->m_FBShader->SetTechnique(SHADER_TECHNIQUE_fb_copy);
-   m_renderDevice->m_FBShader->SetVector(SHADER_w_h_height, (float)(1.0 / renderedRT->GetWidth()), (float)(1.0 / renderedRT->GetHeight()), 1.0f, 1.0f);
+   if (sgsr)
+   {
+      m_renderDevice->m_FBShader->SetTexture(SHADER_tex_fb_filtered, renderedRT->GetColorSampler(), SF_BILINEAR, SA_CLAMP, SA_CLAMP);
+      m_renderDevice->m_FBShader->SetTechnique(SHADER_TECHNIQUE_fb_sgsr);
+      m_renderDevice->m_FBShader->SetVector(SHADER_w_h_height, (float)(1.0 / renderedRT->GetWidth()), (float)(1.0 / renderedRT->GetHeight()), (float)renderedRT->GetWidth(), (float)renderedRT->GetHeight());
+   }
+   else
+   {
+      m_renderDevice->m_FBShader->SetTexture(SHADER_tex_fb_filtered, renderedRT->GetColorSampler());
+      m_renderDevice->m_FBShader->SetTechnique(SHADER_TECHNIQUE_fb_copy);
+      m_renderDevice->m_FBShader->SetVector(SHADER_w_h_height, (float)(1.0 / renderedRT->GetWidth()), (float)(1.0 / renderedRT->GetHeight()), 1.0f, 1.0f);
+   }
    m_renderDevice->DrawFullscreenTexturedQuad(m_renderDevice->m_FBShader);
    return outputRT;
 }
@@ -2969,7 +2980,31 @@ void Renderer::RenderFrame()
       RenderStaticPrepass(); // Update statically prerendered parts if needed
       m_renderDevice->SetRenderTarget("Render Scene"s, GetMSAABackBufferTexture());
       m_renderDevice->AddRenderTargetDependency(m_staticPrepassRT);
-      m_renderDevice->BlitRenderTarget(m_staticPrepassRT, GetMSAABackBufferTexture());
+      // Bring the prepass (colour + depth) into the scene target. On tile-based GPUs the blit costs a transfer pass (read source,
+      // write destination through memory) plus a reload of the destination at the start of the scene pass; instead clear the
+      // target (LOAD_OP_CLEAR: no memory read) and copy the prepass with a point-sampled fullscreen quad that writes colour and
+      // depth as the first command of the scene pass. Pixel-identical to the blit. Kept to the single-view, non-MSAA, same-size
+      // case; stereo/layered/MSAA targets keep the blit.
+      if (m_stereo3D == STEREO_OFF && GetMSAABackBufferTexture()->m_nLayers == 1 && !GetMSAABackBufferTexture()->IsMSAA()
+         && m_staticPrepassRT->GetWidth() == GetMSAABackBufferTexture()->GetWidth() && m_staticPrepassRT->GetHeight() == GetMSAABackBufferTexture()->GetHeight())
+      {
+         m_renderDevice->Clear(clearType::TARGET | clearType::ZBUFFER, 0x00000000);
+         m_renderDevice->ResetRenderState();
+         m_renderDevice->SetRenderState(RenderState::ALPHABLENDENABLE, RenderState::RS_FALSE);
+         m_renderDevice->SetRenderState(RenderState::CULLMODE, RenderState::CULL_NONE);
+         m_renderDevice->SetRenderState(RenderState::ZENABLE, RenderState::RS_TRUE);
+         m_renderDevice->SetRenderState(RenderState::ZFUNC, RenderState::Z_ALWAYS);
+         m_renderDevice->SetRenderState(RenderState::ZWRITEENABLE, RenderState::RS_TRUE);
+         m_renderDevice->m_FBShader->SetTexture(SHADER_tex_fb_filtered, m_staticPrepassRT->GetColorSampler(), SF_NONE, SA_CLAMP, SA_CLAMP);
+         m_renderDevice->m_FBShader->SetTexture(SHADER_tex_depth, m_staticPrepassRT->GetDepthSampler(), SF_NONE, SA_CLAMP, SA_CLAMP);
+         m_renderDevice->m_FBShader->SetVector(SHADER_w_h_height, (float)(1.0 / m_staticPrepassRT->GetWidth()), (float)(1.0 / m_staticPrepassRT->GetHeight()), 1.0f, 1.0f);
+         m_renderDevice->m_FBShader->SetTechnique(SHADER_TECHNIQUE_fb_copy_depth);
+         m_renderDevice->DrawFullscreenTexturedQuad(m_renderDevice->m_FBShader);
+         m_renderDevice->GetCurrentPass()->m_commands.back()->SetForceFirst(true);
+         m_renderDevice->ResetRenderState();
+      }
+      else
+         m_renderDevice->BlitRenderTarget(m_staticPrepassRT, GetMSAABackBufferTexture());
    }
 
    RenderDynamics();
@@ -3014,6 +3049,9 @@ void Renderer::RenderFrame()
    const bool hasAntialiasPass = m_FXAA != Disabled;
    const bool hasSharpenPass = m_sharpen != 0;
    const bool hasUpscalerPass = m_renderWidth < GetBackBufferTexture()->GetWidth();
+   // Spatial upscale (SGSR 1) of a frame rendered BELOW the output resolution: tonemap into the render-resolution LDR buffer,
+   // then upscale to the output (the legacy path lets the tonemap's bilinear fetch do the upscale). Same test as in ApplyUpscaling.
+   const bool hasSgsrPass = (m_stereo3D == STEREO_OFF) && (m_renderWidth > GetBackBufferTexture()->GetWidth()) && (m_table->m_settings.GetPlayer_Upscaler() == 1);
    // OpenXR directly renders to the XR render target view without any postprocess needs
    #ifdef ENABLE_XR
    const bool hasStereoPass = m_stereo3Denabled && (m_stereo3D != STEREO_OFF) && (m_stereo3D != STEREO_VR);
@@ -3022,17 +3060,17 @@ void Renderer::RenderFrame()
    #endif
 
    // Perform color grade LUT / dither / tonemapping, also applying bloom and AO
-   RenderTarget* const tonemapRT = (hasAntialiasPass || hasSharpenPass || hasStereoPass || hasUpscalerPass) ? GetPostProcessRenderTarget1() : m_renderDevice->GetOutputBackBuffer();
+   RenderTarget* const tonemapRT = (hasAntialiasPass || hasSharpenPass || hasStereoPass || hasUpscalerPass || hasSgsrPass) ? GetPostProcessRenderTarget1() : m_renderDevice->GetOutputBackBuffer();
    const ShaderTechniques tonemapTechnique = ApplyTonemapping(renderedRT, tonemapRT);
 
    // Raytraced ball motion blur (BGFX only)
    renderedRT = ApplyBallMotionBlur(renderedRT, tonemapRT, tonemapTechnique);
 
    // Perform post processed anti aliasing
-   renderedRT = ApplyPostProcessedAntialiasing(renderedRT, (hasSharpenPass || hasStereoPass || hasUpscalerPass) ? nullptr : m_renderDevice->GetOutputBackBuffer());
+   renderedRT = ApplyPostProcessedAntialiasing(renderedRT, (hasSharpenPass || hasStereoPass || hasUpscalerPass || hasSgsrPass) ? nullptr : m_renderDevice->GetOutputBackBuffer());
 
    // Performs sharpening
-   renderedRT = ApplySharpening(renderedRT, (hasStereoPass || hasUpscalerPass) ? nullptr : m_renderDevice->GetOutputBackBuffer());
+   renderedRT = ApplySharpening(renderedRT, (hasStereoPass || hasUpscalerPass || hasSgsrPass) ? nullptr : m_renderDevice->GetOutputBackBuffer());
 
    // Upscale: When using downscaled backbuffer (for performance reason), upscaling is done after postprocessing
    renderedRT = ApplyUpscaling(renderedRT, hasStereoPass ? nullptr : m_renderDevice->GetOutputBackBuffer());

@@ -98,6 +98,11 @@ void RenderPass::SortCommands()
          if (!r1->IsDrawCommand())
             return true;
 
+         // Force-first draws (static prepass composite) go right after clears/copies, before everything else including kickers,
+         // since they establish the colour and depth every following draw tests against
+         if (r1->IsForceFirst() != r2->IsForceFirst())
+            return r1->IsForceFirst();
+
          // Move kickers before other draw calls.
          // Kickers disable depth test to be visible through playfield. This would make them to be rendered after opaques, but since they hack depth, they need to be rendered before balls
          // > The right fix would be to remove the kicker hack (use stencil masking, alpha punch or CSG on playfield), this would also solve rendering kicker in VR

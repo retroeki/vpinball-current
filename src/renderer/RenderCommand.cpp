@@ -451,6 +451,7 @@ void RenderCommand::SetDrawMesh(
    else
       m_shaderState = new ShaderState(m_shader, m_rd->UseLowPrecision());
    m_shader->m_state->CopyTo(true, m_shaderState);
+   m_forceFirst = false;
 }
 
 void RenderCommand::SetDrawTexturedQuad(Shader* shader, const Vertex3D_TexelOnly* vertices, const bool isTransparent, const float depth)
@@ -466,6 +467,7 @@ void RenderCommand::SetDrawTexturedQuad(Shader* shader, const Vertex3D_TexelOnly
    else
       m_shaderState = new ShaderState(m_shader, m_rd->UseLowPrecision());
    m_shader->m_state->CopyTo(true, m_shaderState);
+   m_forceFirst = false;
 }
 
 void RenderCommand::SetDrawTexturedQuad(Shader* shader, const Vertex3D_NoTex2* vertices, const bool isTransparent, const float depth)
@@ -481,4 +483,5 @@ void RenderCommand::SetDrawTexturedQuad(Shader* shader, const Vertex3D_NoTex2* v
    else
       m_shaderState = new ShaderState(m_shader, m_rd->UseLowPrecision());
    m_shader->m_state->CopyTo(true, m_shaderState);
+   m_forceFirst = false;
 }

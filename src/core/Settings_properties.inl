@@ -160,7 +160,8 @@ PropEnum(Player, PFReflection, "Reflection Quality"s,
    "Limit the quality of reflections for better performance.\n'Dynamic' is recommended and will give the best results, but may harm performance.\n'Static Only' has no performance cost (except for VR rendering).\nOther options feature different trade-offs between quality and performance."s,
    int, 5, "Disable Reflections"s, "Balls Only"s, "Static Only"s, "Static & Balls"s, "Static & Unsynced Dynamic"s, "Dynamic"s);
 PropInt(Player, MaxTexDimension, "Maximum texture dimension"s, "Images sized above this limit will be automatically scaled down on load"s, 512, 16384, g_isMobile ? 1536 : 16384);
-PropInt(Player, PlayfieldMaxTexDimension, "Playfield maximum texture dimension"s, "Higher cap applied only to playfield images (name contains 'playfield'). 0 = use the global Maximum texture dimension."s, 0, 16384, 0);
+PropInt(Player, PlayfieldMaxTexDimension, "Playfield maximum texture dimension"s, "Higher cap applied to playfield-class images: the table's playfield image, images drawn by full-table objects on the playfield plane (VLM bake atlases, GI-on and insert-text layers), and images named 'playfield' or 'plastic'. 0 = use the global Maximum texture dimension."s, 0, 16384, 0);
+PropInt(Player, PlayfieldTexBudgetMB, "Playfield texture memory budget (MB)"s, "Extra GPU memory the playfield cap may spend over the global cap, granted to the table's playfield image first, then to full-table layers by coverage. 0 = no limit."s, 0, 16384, 0);
 PropInt(Player, AlphaRampAccuracy, "Detail Level"s, "Level of detail for balls and ramps"s, 1, 10, 10);
 PropEnum(Player, BGSet, "View Mode"s, "Select between desktop, cabinet or 'full single screen' viewing mode configurations (if a table has set them up correctly)"s, int, 0, "Desktop / Full Single Screen"s, "Cabinet"s, "Full Single Screen"s);
 
@@ -175,6 +176,7 @@ PropEnum(Player, FXAA, "Post processed antialiasing"s, "Select between different
    "Fast FXAA"s, "Standard FXAA"s, "Quality FXAA"s, "Fast NFAA"s, "Standard DLAA"s, "Quality SMAA"s, "Standard FAAA"s);
 PropEnum(Player, Sharpen, "Post processed sharpening"s, "Select between different sharpening techniques that offer different quality vs performance balances"s, int, 0, "Disabled"s, "CAS"s,
    "Bilateral CAS"s);
+PropEnum(Player, Upscaler, "Upscaler"s, "Filter used when the scene is rendered below the output resolution (render scale under 100%): Bilinear (legacy) or Snapdragon Game Super Resolution 1, a single pass edge-aware spatial upscaler with adaptive sharpening. No effect at 100% render scale."s, int, 1, "Bilinear"s, "SGSR 1"s);
 
 // Ball rendering
 PropBool(Player, BallAntiStretch, "Unstretch Ball"s, "Compensate ball stretching"s, false);

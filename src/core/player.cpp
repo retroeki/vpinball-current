@@ -110,6 +110,339 @@ using namespace VPX;
 #define WIN32_PLAYER_WND_CLASSNAME _T("VPPlayer")
 
 
+#include <limits>
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Playfield-class image selection
+//
+// Player/MaxTexDimension caps every image (1536 on mobile). Player/PlayfieldMaxTexDimension is a higher cap for the
+// images that carry the artwork the player actually reads on the table, granted within Player/PlayfieldTexBudgetMB of
+// extra GPU memory. Which images those are is decided here, once per table, by GEOMETRY rather than by name, because
+// names do not generalise: VLM (Blender lightmapper) bakes pack the playfield into 'VLM.NestmapN' atlases, and classic
+// layered tables draw their GI-on / insert-text / shadow layers from images named by habit ('Layer 1 PF GI ON',
+// 'pfgi', 'Tommy_Inserts_Text', ...). Measured over 72 VPW tables, Sept 2026.
+//
+// An LDR image qualifies when
+//   - it is the table's playfield image (drawn by the implicit playfield or by the 'playfield_mesh' primitive, which
+//     always renders that image whatever its own image field says), or
+//   - a visible primitive (not additive-blend: that is how VLM marks lightmaps), flasher or wall draws it and the
+//     object's XY-projected surface (triangle areas for meshes, outline area for flashers and walls) covers at least
+//     40% of the table rectangle, its bounding box is no more than twice the table's area (drops VR rooms and
+//     cabinets), it sits between 100 units below and 250 units above the playfield and spans less than 500 units in
+//     height (drops cabinet bodies and backboxes), or
+//   - its name contains 'playfield' or 'plastic' (the pre-2026 rule, kept so no table regresses; lowest priority).
+// HDR images (EXR/HDR lightmaps, environments) never qualify.
+// Candidates are ranked playfield image first, then by coverage, then by pixel count, and granted the playfield cap
+// while the extra memory (cap-fitted RGBA8 + mipmaps, minus what the global cap would have used) fits the budget.
+// Budget 0 = unlimited (desktop default). Every decision is logged so a device logcat shows what happened.
+// ---------------------------------------------------------------------------------------------------------------------
+namespace
+{
+   string PfLowerCase(string s)
+   {
+      std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return (char)::tolower(c); });
+      return s;
+   }
+
+   // Dimensions after fitting the larger side to cap (0 = uncapped), same proportional rule as the texture loader
+   void PfFittedDims(const Texture* const tex, const unsigned int cap, unsigned int& w, unsigned int& h)
+   {
+      w = tex->m_width;
+      h = tex->m_height;
+      const unsigned int m = max(w, h);
+      if (cap != 0 && m > cap)
+      {
+         if (w >= h)
+         {
+            h = max(1u, (unsigned int)((uint64_t)h * cap / w));
+            w = cap;
+         }
+         else
+         {
+            w = max(1u, (unsigned int)((uint64_t)w * cap / h));
+            h = cap;
+         }
+      }
+   }
+
+   // Estimated GPU footprint after fitting to cap: RGBA8 (RGBA16F for HDR) plus a third for mipmaps
+   size_t PfFittedBytes(const Texture* const tex, const unsigned int cap, const bool hdr)
+   {
+      unsigned int w, h;
+      PfFittedDims(tex, cap, w, h);
+      return ((size_t)w * h * (hdr ? 8 : 4) * 4) / 3;
+   }
+
+   size_t PfTotalSystemMemoryMB()
+   {
+#if defined(_MSC_VER)
+      MEMORYSTATUSEX statex;
+      statex.dwLength = sizeof(statex);
+      return GlobalMemoryStatusEx(&statex) ? (size_t)(statex.ullTotalPhys >> 20) : 0;
+#elif defined(__ANDROID__) || defined(__linux__)
+      size_t totalMB = 0;
+      FILE* const f = fopen("/proc/meminfo", "r");
+      if (f)
+      {
+         char line[256];
+         while (fgets(line, sizeof(line), f))
+            if (strncmp(line, "MemTotal:", 9) == 0)
+            {
+               unsigned long kB = 0;
+               sscanf(line + 9, " %lu", &kB);
+               totalMB = kB / 1024;
+               break;
+            }
+         fclose(f);
+      }
+      return totalMB;
+#else
+      return 0;
+#endif
+   }
+
+   struct PfCandidate
+   {
+      Texture* tex;
+      float coverage;    // 2 = the table's playfield image, else intersection with the table rectangle, 0 = name match only
+      size_t extraBytes; // playfield-cap footprint minus global-cap footprint
+      string via;
+   };
+}
+
+static ankerl::unordered_dense::set<string> SelectPlayfieldClassImages(PinTable* const table, const unsigned int maxTexDim, const unsigned int playfieldMaxTexDim)
+{
+   ankerl::unordered_dense::set<string> selected;
+   if (playfieldMaxTexDim == 0 || playfieldMaxTexDim <= maxTexDim)
+   {
+      PLOGI << "Playfield texture cap: off (PlayfieldMaxTexDimension=" << playfieldMaxTexDim << ", MaxTexDimension=" << maxTexDim << "), every image uses the global cap";
+      return selected;
+   }
+   const int budgetMB = table->m_settings.GetPlayer_PlayfieldTexBudgetMB();
+
+   ankerl::unordered_dense::map<string, Texture*> images;
+   for (Texture* const tex : table->m_vimage)
+      images[PfLowerCase(tex->m_name)] = tex;
+
+   // Normal maps carry no artwork; they only ever reach this list through the legacy name rule ('..._plastics_NORMALS')
+   ankerl::unordered_dense::set<string> normalMaps;
+   for (IEditable* const edit : table->m_vedit)
+      if (edit->GetItemType() == ItemTypeEnum::eItemPrimitive)
+      {
+         const string& nm = static_cast<Primitive*>(edit)->m_d.m_szNormalMap;
+         if (!nm.empty())
+            normalMaps.insert(PfLowerCase(nm));
+      }
+
+   ankerl::unordered_dense::map<string, PfCandidate> candidates;
+   auto addCandidate = [&](const string& imageName, const float coverage, const string& via)
+   {
+      if (imageName.empty())
+         return;
+      const string lname = PfLowerCase(imageName);
+      const auto it = images.find(lname);
+      if (it == images.end())
+         return;
+      Texture* const tex = it->second;
+      if (max(tex->m_width, tex->m_height) <= maxTexDim) // already under the global cap: nothing to gain
+         return;
+      if (tex->IsHDR()) // lightmaps and environments, never the artwork
+         return;
+      if (normalMaps.find(lname) != normalMaps.end())
+         return;
+      const auto c = candidates.find(lname);
+      if (c == candidates.end())
+         candidates.emplace(lname, PfCandidate { tex, coverage, PfFittedBytes(tex, playfieldMaxTexDim, false) - PfFittedBytes(tex, maxTexDim, false), via });
+      else if (coverage > c->second.coverage)
+      {
+         c->second.coverage = coverage;
+         c->second.via = via;
+      }
+   };
+
+   // 1. The table's playfield image
+   addCandidate(table->m_image, 2.f, "table playfield image"s);
+
+   // 2. Images drawn by full-table objects on the playfield plane
+   const float L = table->m_left, T = table->m_top, R = table->m_right, B = table->m_bottom;
+   const float tableArea = max((R - L) * (B - T), 1.f);
+   constexpr float kMinCoverage = 0.4f; // projected area, as a fraction of the table rectangle
+   constexpr float kMaxOwnArea = 2.0f;
+   constexpr float kMinZ = -100.f, kMaxZ = 250.f, kMaxZSpan = 500.f;
+   const float fmax = std::numeric_limits<float>::max();
+
+   // Coverage is the object's XY-PROJECTED surface on the table, not its bounding box: side blades, cabinet sides and
+   // apron borders have boxes spanning the whole table but almost no projected area, and they were displacing real
+   // GI-on layers under small budgets (11 of 635 tables in the Sept 2026 corpus test).
+   auto considerBounds = [&](const Vertex3Ds& bmin, const Vertex3Ds& bmax, const float projectedArea, const string& via, const std::initializer_list<string>& imgs)
+   {
+      const float ix = max(0.f, min(bmax.x, R) - max(bmin.x, L));
+      const float iy = max(0.f, min(bmax.y, B) - max(bmin.y, T));
+      const float coverage = min(projectedArea, ix * iy) / tableArea;
+      const float own = (bmax.x - bmin.x) * (bmax.y - bmin.y) / tableArea;
+      if (coverage < kMinCoverage || own > kMaxOwnArea)
+         return;
+      if (bmin.z < kMinZ || bmin.z > kMaxZ || (bmax.z - bmin.z) > kMaxZSpan)
+         return;
+      for (const string& img : imgs)
+         addCandidate(img, coverage, via);
+   };
+   // Bounds and polygon area (shoelace) of a drag point outline; returns false when there are no points
+   auto boundsOfPoints = [fmax](const vector<CComObject<DragPoint>*>& pts, const float z0, const float z1, Vertex3Ds& bmin, Vertex3Ds& bmax, float& polyArea) -> bool
+   {
+      if (pts.size() < 3)
+         return false;
+      bmin.Set(fmax, fmax, min(z0, z1));
+      bmax.Set(-fmax, -fmax, max(z0, z1));
+      float twiceArea = 0.f;
+      for (size_t i = 0; i < pts.size(); i++)
+      {
+         const Vertex3Ds& p = pts[i]->m_v;
+         const Vertex3Ds& q = pts[(i + 1) % pts.size()]->m_v;
+         bmin.x = min(bmin.x, p.x);
+         bmin.y = min(bmin.y, p.y);
+         bmax.x = max(bmax.x, p.x);
+         bmax.y = max(bmax.y, p.y);
+         twiceArea += p.x * q.y - q.x * p.y;
+      }
+      polyArea = 0.5f * fabsf(twiceArea);
+      return true;
+   };
+
+   for (IEditable* const edit : table->m_vedit)
+   {
+      Vertex3Ds bmin(0.f, 0.f, 0.f), bmax(0.f, 0.f, 0.f);
+      float polyArea = 0.f;
+      switch (edit->GetItemType())
+      {
+      case ItemTypeEnum::eItemPrimitive:
+      {
+         Primitive* const prim = static_cast<Primitive*>(edit);
+         if (!prim->m_d.m_visible || prim->m_d.m_addBlend || prim->m_d.m_szImage.empty())
+            break;
+         const Mesh& mesh = prim->m_mesh;
+         if (!prim->m_d.m_use3DMesh || mesh.m_vertices.empty() || mesh.m_indices.size() < 3)
+            break; // generic box/sphere primitives are never full-table artwork
+         prim->RecalculateMatrices();
+         const Matrix3D& toWorld = prim->GetFullMatrix();
+         vector<Vertex3Ds> world;
+         world.reserve(mesh.m_vertices.size());
+         bmin.Set(fmax, fmax, fmax);
+         bmax.Set(-fmax, -fmax, -fmax);
+         for (const Vertex3D_NoTex2& v : mesh.m_vertices)
+         {
+            const Vertex3Ds w = toWorld.MultiplyVectorNoPerspective(Vertex3Ds(v.x, v.y, v.z));
+            bmin.x = min(bmin.x, w.x);
+            bmin.y = min(bmin.y, w.y);
+            bmin.z = min(bmin.z, w.z);
+            bmax.x = max(bmax.x, w.x);
+            bmax.y = max(bmax.y, w.y);
+            bmax.z = max(bmax.z, w.z);
+            world.push_back(w);
+         }
+         // XY-projected area of the triangles whose centroid lies on the table
+         float projected = 0.f;
+         const size_t nv = world.size();
+         for (size_t i = 0; i + 2 < mesh.m_indices.size(); i += 3)
+         {
+            const unsigned int ia = mesh.m_indices[i], ib = mesh.m_indices[i + 1], ic = mesh.m_indices[i + 2];
+            if (ia >= nv || ib >= nv || ic >= nv)
+               continue;
+            const Vertex3Ds& a = world[ia];
+            const Vertex3Ds& b = world[ib];
+            const Vertex3Ds& c = world[ic];
+            const float cx = (a.x + b.x + c.x) * (1.f / 3.f), cy = (a.y + b.y + c.y) * (1.f / 3.f);
+            if (cx < L || cx > R || cy < T || cy > B)
+               continue;
+            projected += 0.5f * fabsf((b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y));
+         }
+         considerBounds(bmin, bmax, projected, "primitive '" + prim->GetName() + '\'', { prim->m_d.m_szImage });
+         break;
+      }
+      case ItemTypeEnum::eItemFlasher:
+      {
+         Flasher* const flasher = static_cast<Flasher*>(edit);
+         if (!flasher->m_d.m_isVisible)
+            break;
+         if (boundsOfPoints(flasher->GetDragPoints(), flasher->m_d.m_height, flasher->m_d.m_height, bmin, bmax, polyArea))
+            considerBounds(bmin, bmax, polyArea, "flasher '" + flasher->GetName() + '\'', { flasher->m_d.m_szImageA, flasher->m_d.m_szImageB });
+         break;
+      }
+      case ItemTypeEnum::eItemSurface:
+      {
+         Surface* const wall = static_cast<Surface*>(edit);
+         if (!wall->m_d.m_visible)
+            break;
+         if (boundsOfPoints(wall->GetDragPoints(), wall->m_d.m_heightbottom, wall->m_d.m_heighttop, bmin, bmax, polyArea))
+            considerBounds(bmin, bmax, polyArea, "wall '" + wall->GetName() + '\'',
+               { wall->m_d.m_topBottomVisible ? wall->m_d.m_szImage : string(), wall->m_d.m_sideVisible ? wall->m_d.m_szSideImage : string() });
+         break;
+      }
+      default: break; // ramps never carried full-table artwork in the corpus, and their outline is a path, not an area
+      }
+   }
+
+   // 3. Legacy name matches, lowest priority
+   for (Texture* const tex : table->m_vimage)
+   {
+      const string lname = PfLowerCase(tex->m_name);
+      if (lname.find("playfield") != string::npos || lname.find("plastic") != string::npos)
+         addCandidate(tex->m_name, 0.f, "name match"s);
+   }
+
+   vector<PfCandidate> ranked;
+   ranked.reserve(candidates.size());
+   for (const auto& kv : candidates)
+      ranked.push_back(kv.second);
+   std::sort(ranked.begin(), ranked.end(), [](const PfCandidate& a, const PfCandidate& b)
+   {
+      if (a.coverage != b.coverage)
+         return a.coverage > b.coverage;
+      return (uint64_t)a.tex->m_width * a.tex->m_height > (uint64_t)b.tex->m_width * b.tex->m_height;
+   });
+
+   const size_t totalMemMB = PfTotalSystemMemoryMB();
+   size_t tableTexBytes = 0;
+   for (const Texture* const tex : table->m_vimage)
+      tableTexBytes += PfFittedBytes(tex, maxTexDim, tex->IsHDR());
+   const size_t tableTexMB = tableTexBytes >> 20;
+   PLOGI << "Playfield texture cap: global " << maxTexDim << ", playfield " << playfieldMaxTexDim << ", budget "
+         << (budgetMB > 0 ? std::to_string(budgetMB) + " MB" : "unlimited"s) << ", device RAM "
+         << (totalMemMB > 0 ? std::to_string(totalMemMB) + " MB" : "unknown"s) << ", table textures at the global cap ~" << tableTexMB << " MB, "
+         << ranked.size() << " candidate(s)";
+   if (budgetMB > 0 && totalMemMB > 0 && tableTexMB * 4 > totalMemMB)
+   {
+      PLOGW << "Playfield texture cap: skipped, this table's textures (~" << tableTexMB << " MB) already exceed a quarter of device RAM (" << totalMemMB << " MB)";
+      return selected;
+   }
+
+   size_t spentBytes = 0;
+   const size_t budgetBytes = (size_t)max(budgetMB, 0) << 20;
+   for (const PfCandidate& c : ranked)
+   {
+      const bool isTablePlayfield = c.coverage >= 2.f;
+      const bool granted = (budgetMB <= 0) || isTablePlayfield || (spentBytes + c.extraBytes <= budgetBytes);
+      unsigned int w, h;
+      PfFittedDims(c.tex, granted ? playfieldMaxTexDim : maxTexDim, w, h);
+      std::ostringstream why;
+      why << c.via;
+      if (c.coverage > 0.f && !isTablePlayfield)
+         why << " covering " << std::fixed << std::setprecision(0) << (c.coverage * 100.f) << "% of the table";
+      if (granted)
+      {
+         selected.insert(PfLowerCase(c.tex->m_name));
+         spentBytes += c.extraBytes;
+         PLOGI << "  + '" << c.tex->m_name << "' " << c.tex->m_width << 'x' << c.tex->m_height << " -> " << w << 'x' << h << " (+" << (c.extraBytes >> 20) << " MB) via " << why.str();
+      }
+      else
+         PLOGI << "  - '" << c.tex->m_name << "' " << c.tex->m_width << 'x' << c.tex->m_height << " stays " << w << 'x' << h << " (+" << (c.extraBytes >> 20)
+               << " MB would exceed the " << budgetMB << " MB budget) via " << why.str();
+   }
+   PLOGI << "Playfield texture cap: " << selected.size() << " of " << ranked.size() << " candidate(s) raised to " << playfieldMaxTexDim << ", +" << (spentBytes >> 20) << " MB"
+         << (budgetMB > 0 ? " of the " + std::to_string(budgetMB) + " MB budget" : ""s);
+   return selected;
+}
+
 Player::Player(PinTable *const table, const int playMode)
    : m_ptable(table)
    , m_backglassOutput(VPXWindowId::VPXWINDOW_Backglass)
@@ -523,12 +856,11 @@ Player::Player(PinTable *const table, const int playMode)
       vector<Texture *> failedPreloads;
       const unsigned int maxTexDim = static_cast<unsigned int>(m_ptable->m_settings.GetPlayer_MaxTexDimension());
       const unsigned int playfieldMaxTexDim = static_cast<unsigned int>(m_ptable->m_settings.GetPlayer_PlayfieldMaxTexDimension());
-      // The table's designated playfield image (m_image) is named differently across tables ("pf", "Playfield", etc.),
-      // so match it explicitly in addition to any image whose name contains "playfield" (layered-playfield mods) or
-      // "plastic" (full-playfield plastics overlays that sit on top of the playfield and carry on-table art).
-      string playfieldImageName = m_ptable->m_image;
-      std::transform(playfieldImageName.begin(), playfieldImageName.end(), playfieldImageName.begin(), [](unsigned char c){ return (char)::tolower(c); });
-      auto loadImage = [maxTexDim, playfieldMaxTexDim, playfieldImageName, &mutex, &nLoadInProgress, &estimatedInProgressMem, preloadCache, this, &failedPreloads](Texture *image, bool resizeOnLowMem)
+      // Images that carry the on-table artwork (the table's playfield image, the full-table layers drawn over it,
+      // VLM bake atlases, legacy 'playfield'/'plastic' names) may use the higher playfield cap, within the memory
+      // budget. Selected once here by geometry, see SelectPlayfieldClassImages.
+      const ankerl::unordered_dense::set<string> playfieldClassImages = SelectPlayfieldClassImages(m_ptable, maxTexDim, playfieldMaxTexDim);
+      auto loadImage = [maxTexDim, playfieldMaxTexDim, &playfieldClassImages, &mutex, &nLoadInProgress, &estimatedInProgressMem, preloadCache, this, &failedPreloads](Texture *image, bool resizeOnLowMem)
       {
          bool readyToLoad = false;
          const size_t neededMem = image->GetEstimatedGPUSize() * 3; // 3x: image loader + BaseTexture + rendering API copy
@@ -580,11 +912,11 @@ Player::Player(PinTable *const table, const int playMode)
             else
             {
                unsigned int imgMaxTexDim = maxTexDim;
-               if (playfieldMaxTexDim > maxTexDim)
+               if (playfieldMaxTexDim > maxTexDim && !playfieldClassImages.empty())
                {
                   string lname = image->m_name;
                   std::transform(lname.begin(), lname.end(), lname.begin(), [](unsigned char c){ return (char)::tolower(c); });
-                  if (lname.find("playfield") != string::npos || lname.find("plastic") != string::npos || (!playfieldImageName.empty() && lname == playfieldImageName))
+                  if (playfieldClassImages.find(lname) != playfieldClassImages.end())
                      imgMaxTexDim = playfieldMaxTexDim;
                }
                const auto buffer = image->GetRawBitmap(resizeOnLowMem, imgMaxTexDim);
@@ -617,9 +949,15 @@ Player::Player(PinTable *const table, const int playMode)
                   }
                   if ((image->m_width > buffer->width()) || (image->m_height > buffer->height()))
                   {
-                     const bool isError = (buffer->width() < imgMaxTexDim) || (buffer->height() < imgMaxTexDim);
+                     // A proportional resize to the cap always leaves the shorter side below the cap, so compare the
+                     // LARGER side against what the cap should have produced. Only a result smaller than that means the
+                     // loader had to shrink further because memory ran out.
+                     const unsigned int srcMax = max(image->m_width, image->m_height);
+                     const unsigned int expectedMax = (imgMaxTexDim == 0) ? srcMax : min(srcMax, imgMaxTexDim);
+                     const bool isError = max(buffer->width(), buffer->height()) < expectedMax;
                      PLOG(isError ? plog::Severity::error : plog::Severity::warning) << "Image '" << image->m_name << "' was downsized from "
-                           << image->m_width << 'x' << image->m_height << " to " << buffer->width() << 'x' << buffer->height() << (isError ? " due to low memory " : " due to user settings");
+                           << image->m_width << 'x' << image->m_height << " to " << buffer->width() << 'x' << buffer->height()
+                           << (isError ? " due to low memory" : (imgMaxTexDim == maxTexDim ? " to fit the global texture cap " : " to fit the playfield texture cap ")) << (isError ? "" : std::to_string(imgMaxTexDim));
                      if (isError)
                         m_liveUI->PushNotification("Image '" + image->m_name + "' was downsized due to low memory", 5000);
                   }

@@ -314,6 +314,7 @@ public:
    void UpdateStatusBarInfo() final;
 
    void RecalculateMatrices();
+   const Matrix3D &GetFullMatrix() const { return m_fullMatrix; } // local mesh -> world, valid after RecalculateMatrices()
    void TransformVertices();
 
    void setInPlayState(const bool newVal);
@@ -348,6 +349,20 @@ private:
    bool m_groupdRendering = false;
    int m_numGroupVertices = 0;
    int m_numGroupIndices = 0;
+   // Automatic lightmap group rendering (see RenderSetup): light-driven primitives sharing light, image, material and every
+   // render-relevant flag are merged into the first one's mesh buffer. The leader keeps a snapshot of each member's state and
+   // dissolves the group (members re-setup individually) the moment one of them is changed by script.
+   // Member visibility is handled INSIDE the group: the merged index buffer is dynamic and rebuilt from the visible members
+   // whenever one toggles (VLM tables switch the pieces baked for movable parts by visibility every few frames).
+   struct LightmapGroupMember { Primitive* prim; bool visible; float alpha; COLORREF color; Vertex3Ds pos; Vertex3Ds size; float rotAndTra[9]; unsigned int vertexOffset; };
+   vector<LightmapGroupMember> m_lightmapGroup; // leader only
+   bool m_lightmapGroupDisabled = false; // set when a group dissolves: this primitive is never merged again
+   bool m_lightmapGroupIndex16 = true;
+   static bool LightmapGroupCompatible(const Primitive& a, const Primitive& b);
+   static bool LightmapGroupMemberChanged(const LightmapGroupMember& m);
+   bool LightmapGroupDiverged() const;
+   void DissolveLightmapGroup();
+   void RebuildLightmapGroupIndices();
    float m_currentFrame = -1.f;
    float m_speed = 0.f;
    bool m_doAnimation = false;

@@ -140,6 +140,9 @@ public:
 
    void GetTextureCoords(const vector<RenderVertex> & vv, float **ppcoords) const;
 
+   // Read-only access to the control points (used by Player to measure an object's playfield footprint)
+   const vector< CComObject<DragPoint>* > &GetDragPoints() const { return m_vdpoint; }
+
    friend class DragPoint;
 
    PropertyPane *m_propVisuals;

@@ -9,6 +9,14 @@
 
 #include <thread>
 #include <atomic>
+#include <mutex>
+#include <cstdio>
+#include <cmath>
+#include <cctype>
+#include <algorithm>
+#if defined(__ANDROID__)
+#include <dirent.h>
+#endif
 #include <chrono>
 #include <csignal>
 
@@ -60,6 +68,205 @@
 // declaration in Sampler.cpp and no-ops its destroy calls when false (handle leaks,
 // but the context is gone so the leak is meaningless).
 std::atomic<bool> g_bgfxIsAlive{false};
+
+// Bottleneck-triage timing snapshot for PerfUI, written by the render thread after each bgfx::frame() and read
+// cross-thread (logic thread) through extern declarations in PerfUI.cpp; atomics keep the reads tear-free. Kept out
+// of RenderDevice.h on purpose (that header is included almost everywhere; a field there forces a full rebuild).
+// Why this exists: the FrameProfiler's "Submit" row has the bgfx backend interval folded into it (AdjustBGFXSubmit),
+// and on bgfx-Vulkan that interval contains vkAcquireNextImageKHR + the back-buffer fence wait (SwapChainVK::acquire,
+// reached from setFrameBuffer inside RendererContextVK::submit), so Submit/Flip cannot separate CPU from GPU/display.
+// Note: bgfx::getStats() read after frame N reports the render of frame N-1 (submit/render frame swap) - fine for magnitude.
+std::atomic<uint32_t> g_vpxPerfGpuFrameUs{0};    // GPU execution time of the last completed frame (0 = timestamp queries unsupported)
+std::atomic<uint32_t> g_vpxPerfGpuLatency{0};    // frames the GPU has lagged behind submission (bgfx keeps a running max)
+std::atomic<uint32_t> g_vpxPerfBgfxBackendUs{0}; // bgfx backend CPU interval: command recording + swapchain acquire + back-buffer fence waits
+std::atomic<uint32_t> g_vpxPerfVpxEncodeUs{0};   // VPX -> bgfx command encoding (SubmitRenderFrame), pure CPU
+
+// VPX_PERF_SESSION_DIAG: compile-time switch, default 0 (off), for the perf SESSION diagnostics used in the 2026-09 mobile
+// pipeline work: the "PERF 10s" / "PERF SESSION SUMMARY" logcat lines (renderer/RenderDevice.cpp), the lightmap-group
+// merge/split logcat lines (parts/primitive.cpp) and the extra triage rows of the Full FPS overlay (ui/live/PerfUI.cpp).
+// The same #ifndef block sits in each of those three files: set all three to 1 (or build with -DVPX_PERF_SESSION_DIAG=1).
+#ifndef VPX_PERF_SESSION_DIAG
+#define VPX_PERF_SESSION_DIAG 0
+#endif
+
+// Perf SESSION statistics (render thread). Every presented frame since table start (minus a 5 s warm-up) is accumulated,
+// bucketed by the Android thermal status at that moment, so two builds can be compared over a whole game without matching
+// scenes or taking screenshots mid-play. Frame time is the interval between consecutive Flip completions on the render thread
+// (uncapped + GPU-bound => frame time == GPU time). "gpuwait" = time spent in Flip minus the bgfx backend interval.
+// Frames longer than 250 ms are pauses/loads, counted as "stalls" and kept out of every average.
+// ATTRIBUTION: each frame also records how many light-driven (lightmap) primitive draws it issued ("lm") and how many other
+// draws; a least-squares fit of frame time against lm draws splits the frame into a FIXED BASE (everything that is drawn
+// regardless of lights: bake meshes, tonemap, prepass blit) and a PER-LIT-OVERLAY cost. r is the correlation; trust the
+// fit when |r| is well above 0.5 and the window did not straddle a GPU clock change.
+// Output: PerfUI Full mode (per-thermal session lines, refreshed every 10 s); logcat tag vpinball, "PERF 10s" every 10 s
+// (window + thermal + battery temperature + GPU clock when sysfs exposes it) and "PERF SESSION SUMMARY" at table exit.
+// Only collected and emitted when VPX_PERF_SESSION_DIAG is 1 (see above); the code stays compiled either way.
+extern unsigned int g_vpxPerfLmDraws, g_vpxPerfLmTris, g_vpxPerfLmFrame; // parts/primitive.cpp
+namespace
+{
+// GPU clock (MHz) from sysfs where the device exposes it (Adreno kgsl, Mali devfreq, Samsung gpu_clock); probed once.
+string PerfGpuClockMHz()
+{
+#if defined(__ANDROID__)
+   static string path;
+   static bool probed = false;
+   if (!probed)
+   {
+      probed = true;
+      static const char* const candidates[] = { "/sys/class/kgsl/kgsl-3d0/gpuclk", "/sys/class/kgsl/kgsl-3d0/devfreq/cur_freq",
+         "/sys/kernel/gpu/gpu_clock", "/sys/class/misc/mali0/device/cur_freq", "/sys/class/misc/mali0/device/devfreq/cur_freq" };
+      for (const char* c : candidates)
+         if (FILE* f = fopen(c, "r")) { path = c; fclose(f); break; }
+      if (path.empty())
+         if (DIR* d = opendir("/sys/class/devfreq"))
+         {
+            while (struct dirent* e = readdir(d))
+            {
+               string n = e->d_name;
+               for (char& ch : n) ch = static_cast<char>(tolower(static_cast<unsigned char>(ch)));
+               if (n.find("gpu") == string::npos && n.find("g3d") == string::npos && n.find("mali") == string::npos && n.find("kgsl") == string::npos)
+                  continue;
+               const string cand = string("/sys/class/devfreq/") + e->d_name + "/cur_freq";
+               if (FILE* f = fopen(cand.c_str(), "r")) { path = cand; fclose(f); break; }
+            }
+            closedir(d);
+         }
+   }
+   if (path.empty()) return string();
+   FILE* f = fopen(path.c_str(), "r");
+   if (!f) return string();
+   double v = 0.;
+   const int n = fscanf(f, "%lf", &v);
+   fclose(f);
+   if (n != 1 || v <= 0.) return string();
+   if (v > 1e8) v /= 1e6; else if (v > 1e5) v /= 1e3; // Hz or kHz -> MHz
+   char buf[32];
+   snprintf(buf, sizeof(buf), "%.0fMHz", v);
+   return buf;
+#else
+   return string();
+#endif
+}
+
+struct PerfBucket
+{
+   uint64_t frames = 0, stalls = 0, sumDraws = 0, sumLmDraws = 0, sumLmTris = 0, sumTris = 0;
+   double sumFrameUs = 0., sumEncodeUs = 0., sumBackendUs = 0., sumGpuWaitUs = 0.;
+   double sx = 0., sy = 0., sxx = 0., sxy = 0., syy = 0.; // x = lm draws, y = frame ms (least-squares fit)
+   static constexpr int NBINS = 400; // 0.25 ms bins up to 100 ms
+   uint32_t hist[NBINS] = {};
+   void Add(uint32_t frameUs, uint32_t encodeUs, uint32_t backendUs, uint32_t gpuWaitUs, uint32_t draws, uint32_t lmDraws, uint32_t lmTris, uint32_t tris)
+   {
+      frames++;
+      sumFrameUs += frameUs; sumEncodeUs += encodeUs; sumBackendUs += backendUs; sumGpuWaitUs += gpuWaitUs;
+      sumDraws += draws; sumLmDraws += lmDraws; sumLmTris += lmTris; sumTris += tris;
+      const double x = static_cast<double>(lmDraws), y = static_cast<double>(frameUs) * 1e-3;
+      sx += x; sy += y; sxx += x * x; sxy += x * y; syy += y * y;
+      hist[std::min<uint32_t>(frameUs / 250u, NBINS - 1)]++;
+   }
+   float Percentile(float p) const // in ms
+   {
+      if (frames == 0) return 0.f;
+      const uint64_t target = static_cast<uint64_t>(p * static_cast<double>(frames));
+      uint64_t acc = 0;
+      for (int i = 0; i < NBINS; i++) { acc += hist[i]; if (acc > target) return (static_cast<float>(i) + 0.5f) * 0.25f; }
+      return 100.f;
+   }
+   bool Fit(double& baseMs, double& usPerLm, double& r) const // frame_ms = baseMs + usPerLm/1000 * lmDraws
+   {
+      const double n = static_cast<double>(frames);
+      const double vx = n * sxx - sx * sx, vy = n * syy - sy * sy;
+      if (frames < 60 || vx <= 1e-9 || vy <= 1e-9) return false;
+      const double slope = (n * sxy - sx * sy) / vx;
+      baseMs = (sy - slope * sx) / n;
+      usPerLm = slope * 1000.;
+      r = (n * sxy - sx * sy) / sqrt(vx * vy);
+      return true;
+   }
+   string Line(const char* label) const
+   {
+      if (frames == 0) return string();
+      const double f = static_cast<double>(frames);
+      char buf[384];
+      int len = snprintf(buf, sizeof(buf), "%-8s %6lluf %5.1ffps p50 %4.1f p95 %4.1f | lm %3.0f (%.2fMtri) other %3.0f | gpuwait %4.1f %2.0f%% cpu %3.1f+%3.1f",
+         label, static_cast<unsigned long long>(frames), 1e6 * f / sumFrameUs, Percentile(0.5f), Percentile(0.95f),
+         static_cast<double>(sumLmDraws) / f, static_cast<double>(sumLmTris) / f * 1e-6, (static_cast<double>(sumDraws) - static_cast<double>(sumLmDraws)) / f,
+         1e-3 * sumGpuWaitUs / f, 100. * sumGpuWaitUs / sumFrameUs, 1e-3 * sumEncodeUs / f, 1e-3 * sumBackendUs / f);
+      double base = 0., perLm = 0., r = 0.;
+      if (len > 0 && len < static_cast<int>(sizeof(buf)) && Fit(base, perLm, r))
+         len += snprintf(buf + len, sizeof(buf) - len, " | fit base %4.1fms +%3.0fus/lm r=%.2f", base, perLm, r);
+      if (len > 0 && len < static_cast<int>(sizeof(buf)) && stalls)
+         snprintf(buf + len, sizeof(buf) - len, " | stalls %llu", static_cast<unsigned long long>(stalls));
+      return buf;
+   }
+};
+
+const char* PerfThermalLabel(int t)
+{
+   static const char* const names[] = { "NONE", "LIGHT", "MODERATE", "SEVERE", "CRITICAL", "EMERG", "SHUTDOWN" };
+   return (t >= 0 && t < 7) ? names[t] : "UNKNOWN";
+}
+
+struct PerfSession
+{
+   std::mutex mtx;
+   PerfBucket total, window, byThermal[7];
+   uint64_t firstFlipUs = 0, lastFlipUs = 0, windowStartUs = 0;
+   string snapshot; // preformatted text for PerfUI, refreshed every 10 s
+   string Format() const // caller holds mtx
+   {
+      string s = "Session since start (5 s warm-up dropped), per thermal state. lm = lit lightmap draws/frame; fit = frame ms vs lm:\n";
+      for (int t = 0; t < 7; t++)
+         if (byThermal[t].frames) s += byThermal[t].Line(PerfThermalLabel(t)) + '\n';
+      s += total.Line("ALL");
+      return s;
+   }
+   void OnFrame(uint64_t nowUs, uint32_t encodeUs, uint32_t backendUs, uint32_t flipUs, uint32_t draws, uint32_t lmDraws, uint32_t lmTris, uint32_t tris)
+   {
+      if (firstFlipUs == 0) { firstFlipUs = lastFlipUs = windowStartUs = nowUs; return; }
+      const uint64_t frameUs64 = nowUs - lastFlipUs;
+      lastFlipUs = nowUs;
+      if (nowUs - firstFlipUs < 5000000ull) { windowStartUs = nowUs; return; } // warm-up: shader compiles, texture uploads, table intro
+      const int thermal = RuntimeStats::GetThermalStatus();
+      const bool thermalOk = thermal >= 0 && thermal < 7;
+      std::lock_guard<std::mutex> lock(mtx);
+      if (frameUs64 > 250000ull)
+      { // pause, menu, load hitch: not a rendered frame time
+         total.stalls++; window.stalls++;
+         if (thermalOk) byThermal[thermal].stalls++;
+      }
+      else
+      {
+         const uint32_t frameUs = static_cast<uint32_t>(frameUs64);
+         const uint32_t gpuWaitUs = flipUs > backendUs ? flipUs - backendUs : 0u;
+         total.Add(frameUs, encodeUs, backendUs, gpuWaitUs, draws, lmDraws, lmTris, tris);
+         window.Add(frameUs, encodeUs, backendUs, gpuWaitUs, draws, lmDraws, lmTris, tris);
+         if (thermalOk) byThermal[thermal].Add(frameUs, encodeUs, backendUs, gpuWaitUs, draws, lmDraws, lmTris, tris);
+      }
+      if (nowUs - windowStartUs >= 10000000ull)
+      {
+         char env[64];
+         snprintf(env, sizeof(env), "%.1fC %s", RuntimeStats::GetBatteryTempC(), PerfGpuClockMHz().c_str());
+         PLOGI << "PERF 10s @" << PerfThermalLabel(thermal) << ' ' << env << ": " << window.Line("window");
+         window = PerfBucket();
+         windowStartUs = nowUs;
+         snapshot = Format();
+      }
+   }
+   void LogFinal()
+   {
+      std::lock_guard<std::mutex> lock(mtx);
+      if (total.frames == 0) return;
+      PLOGI << "PERF SESSION SUMMARY\n" << Format();
+   }
+} g_perfSession;
+}
+// Read by PerfUI (logic thread) - see PerfUI.cpp
+string VpxPerfSessionSnapshot()
+{
+   std::lock_guard<std::mutex> lock(g_perfSession.mtx);
+   return g_perfSession.snapshot;
+}
 
 #if defined(__ANDROID__)
 // Replay export target: when non-null, the render loop points the bgfx
@@ -1054,6 +1261,9 @@ void RenderDevice::RenderThread(RenderDevice* rd, const bgfx::Init& initReq)
          }
 #endif
 
+         #if VPX_PERF_SESSION_DIAG
+         uint32_t perfLmDraws = 0, perfLmTris = 0; // lightmap draws issued by the frame being submitted (parts/primitive.cpp)
+         #endif
          // lock prepared frame and submit it
          {
             #ifdef MSVC_CONCURRENCY_VIEWER
@@ -1090,7 +1300,13 @@ void RenderDevice::RenderThread(RenderDevice* rd, const bgfx::Init& initReq)
                bgfx::reset(backBufferWidth, backBufferHeight, init.resolution.reset | (gpuVSync ? BGFX_RESET_VSYNC : BGFX_RESET_NONE), init.resolution.formatColor);
                rd->m_outputWnd[0]->GetBackBuffer()->SetSize(backBufferWidth, backBufferHeight);
             }
+            const uint64_t encodeStartUs = usec();
             rd->SubmitRenderFrame();
+            g_vpxPerfVpxEncodeUs.store(static_cast<uint32_t>(usec() - encodeStartUs), std::memory_order_relaxed);
+            #if VPX_PERF_SESSION_DIAG
+            // The logic thread cannot be inside PrepareFrame while we hold m_frameMutex, so these are this frame's counts
+            if (g_vpxPerfLmFrame == g_pplayer->m_overall_frames) { perfLmDraws = g_vpxPerfLmDraws; perfLmTris = g_vpxPerfLmTris; }
+            #endif
             #ifdef MSVC_CONCURRENCY_VIEWER
             delete tagSpan;
             #endif
@@ -1146,7 +1362,13 @@ void RenderDevice::RenderThread(RenderDevice* rd, const bgfx::Init& initReq)
    #endif
             }
 #endif
+            #if VPX_PERF_SESSION_DIAG
+            const uint64_t perfFlipStartUs = usec();
+            #endif
             rd->Flip();
+            #if VPX_PERF_SESSION_DIAG
+            const uint32_t perfFlipUs = static_cast<uint32_t>(usec() - perfFlipStartUs);
+            #endif
             if (rd->m_screenshotFrameDelay > 0) {
                rd->m_screenshotFrameDelay--;
                if (rd->m_screenshotFrameDelay == 0)
@@ -1160,10 +1382,24 @@ void RenderDevice::RenderThread(RenderDevice* rd, const bgfx::Init& initReq)
             g_pplayer->m_logicProfiler.OnPresented(usec() - bgfxSubmit);
             g_pplayer->m_renderProfiler->ExitProfileSection();
             g_pplayer->m_renderProfiler->AdjustBGFXSubmit(static_cast<uint32_t>(bgfxSubmit));
+            // Publish the triage numbers for PerfUI (see the g_vpxPerf* definitions at the top of this file)
+            g_vpxPerfBgfxBackendUs.store(static_cast<uint32_t>(bgfxSubmit), std::memory_order_relaxed);
+            g_vpxPerfGpuLatency.store(stats->maxGpuLatency, std::memory_order_relaxed);
+            g_vpxPerfGpuFrameUs.store((stats->gpuTimerFreq > 0 && stats->gpuTimeEnd > stats->gpuTimeBegin)
+               ? static_cast<uint32_t>(static_cast<uint64_t>(stats->gpuTimeEnd - stats->gpuTimeBegin) * 1000000ull / static_cast<uint64_t>(stats->gpuTimerFreq))
+               : 0u, std::memory_order_relaxed);
+            #if VPX_PERF_SESSION_DIAG
+            g_perfSession.OnFrame(usec(), g_vpxPerfVpxEncodeUs.load(std::memory_order_relaxed), static_cast<uint32_t>(bgfxSubmit), perfFlipUs,
+               rd->m_frameDrawCalls, perfLmDraws, perfLmTris, rd->m_frameDrawnTriangles);
+            #endif
          }
       }
    }
    
+   #if VPX_PERF_SESSION_DIAG
+   g_perfSession.LogFinal();
+   #endif
+
    // Wait until main thread has released all native resources
    rd->m_frameReadySem.wait();
    delete rd->m_outputWnd[0]->GetBackBuffer();

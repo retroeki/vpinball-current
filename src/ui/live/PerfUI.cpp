@@ -8,6 +8,32 @@
 #include "imgui/imgui_internal.h"
 #include "implot/implot.h"
 
+#include <atomic>
+
+// VPX_PERF_SESSION_DIAG: compile-time switch, default 0 (off), for the perf SESSION diagnostics used in the 2026-09 mobile
+// pipeline work: the "PERF 10s" / "PERF SESSION SUMMARY" logcat lines (renderer/RenderDevice.cpp), the lightmap-group
+// merge/split logcat lines (parts/primitive.cpp) and the extra triage rows of the Full FPS overlay (ui/live/PerfUI.cpp).
+// The same #ifndef block sits in each of those three files: set all three to 1 (or build with -DVPX_PERF_SESSION_DIAG=1).
+#ifndef VPX_PERF_SESSION_DIAG
+#define VPX_PERF_SESSION_DIAG 0
+#endif
+
+#if VPX_PERF_SESSION_DIAG
+// Per-thermal-state session statistics, defined in renderer/RenderDevice.cpp (render thread; snapshot refreshed every 10 s)
+extern std::string VpxPerfSessionSnapshot();
+// Off-insert skip counter, defined in parts/primitive.cpp (logic thread, frame-stamped)
+extern unsigned int g_vpxPerfOffInsertsSkipped;
+extern unsigned int g_vpxPerfOffInsertsSkippedFrame;
+
+#if defined(ENABLE_BGFX)
+// Render-thread timing snapshot, defined in renderer/RenderDevice.cpp (see the comment there for why these exist)
+extern std::atomic<uint32_t> g_vpxPerfGpuFrameUs;
+extern std::atomic<uint32_t> g_vpxPerfGpuLatency;
+extern std::atomic<uint32_t> g_vpxPerfBgfxBackendUs;
+extern std::atomic<uint32_t> g_vpxPerfVpxEncodeUs;
+#endif
+#endif
+
 
 PerfUI::PerfUI(Player *const player)
    : m_player(player)
@@ -303,6 +329,33 @@ void PerfUI::RenderFPS()
       rd->m_frameDrawBasic, rd->m_frameDrawLight, rd->m_frameDrawFlasher, rd->m_frameDrawDMD, rd->m_frameDrawBall, rd->m_frameDrawOther,
       m_player->m_renderer->IsUsingStaticPrepass() ? "ON" : "OFF",
       m_player->m_renderer->m_frameStaticPrepassRebuilt ? "YES" : "no");
+   #if VPX_PERF_SESSION_DIAG
+   #if defined(ENABLE_BGFX)
+   // Bottleneck triage. The "Submit" row above cannot separate CPU from GPU: it has the bgfx backend interval folded in,
+   // and that interval contains the swapchain acquire + back-buffer fence waits. Read these three together:
+   //   GPU           GPU execution time of the frame (bgfx timestamp queries). Close to the frame period => GPU-bound.
+   //   bgfx CPU+wait backend command recording + swapchain/fence waits. Large while GPU is small => waiting on display/swapchain.
+   //   VPX encode    VPX -> bgfx command encoding. Large => CPU-bound inside vpinball itself.
+   const uint32_t gpuUs = g_vpxPerfGpuFrameUs.load(std::memory_order_relaxed);
+   if (gpuUs > 0)
+      ImGui::Text("GPU: %5.1fms (gpu lag %u)   bgfx CPU+wait: %5.1fms   VPX encode: %5.1fms",
+         1e-3 * gpuUs, g_vpxPerfGpuLatency.load(std::memory_order_relaxed),
+         1e-3 * g_vpxPerfBgfxBackendUs.load(std::memory_order_relaxed), 1e-3 * g_vpxPerfVpxEncodeUs.load(std::memory_order_relaxed));
+   else
+      ImGui::Text("GPU: n/a (no timestamp queries)   bgfx CPU+wait: %5.1fms   VPX encode: %5.1fms",
+         1e-3 * g_vpxPerfBgfxBackendUs.load(std::memory_order_relaxed), 1e-3 * g_vpxPerfVpxEncodeUs.load(std::memory_order_relaxed));
+   #endif
+   // Light-driven inserts whose light is off are no longer drawn (Primitive::Render early-out); this is how many were skipped this frame
+   ImGui::Text("Off-insert draws skipped: %u",
+      g_vpxPerfOffInsertsSkippedFrame == m_player->m_overall_frames ? g_vpxPerfOffInsertsSkipped : 0u);
+   if (m_showPerf == PerfMode::PM_STATS)
+   {
+      // Whole-session numbers per thermal state: compare two builds by their NONE line without matching scenes.
+      // Same text goes to logcat as "PERF" lines every 10 s and "PERF SESSION SUMMARY" at table exit.
+      const std::string session = VpxPerfSessionSnapshot();
+      ImGui::TextUnformatted(session.empty() ? "Session stats: collecting (first 5 s dropped, refreshes every 10 s)..." : session.c_str());
+   }
+   #endif // VPX_PERF_SESSION_DIAG
    ImGui::EndChild();
    #if defined(ENABLE_BGFX)
    if (pop)

@@ -28,6 +28,8 @@ public:
    float GetDepth() const { return m_depth; }
    void SetTransparent(bool t) { m_isTransparent = t; }
    void SetDepth(float d) { m_depth = d; }
+   bool IsForceFirst() const { return m_forceFirst; }
+   void SetForceFirst(bool f) { m_forceFirst = f; }
 
    void Execute(const int nInstances, const bool log);
 
@@ -61,6 +63,7 @@ private:
    ShaderState* m_shaderState = nullptr;
    RenderState m_renderState;
    bool m_isTransparent;
+   bool m_forceFirst = false; // sorted right after clears/copies, before every other draw of the pass (static prepass composite)
 
    // For RC_CLEAR
    DWORD m_clearARGB = 0;

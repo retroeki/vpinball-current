@@ -10,6 +10,30 @@
 #include "ThreadPool.h"
 #include "renderer/Shader.h"
 
+// Perf readout for PerfUI: light-driven insert draws skipped this frame because their light is fully off (see the
+// early-out in Primitive::Render). Logic thread only (Render and PerfUI both run inside Player::PrepareFrame), so no
+// atomics. Frame-stamped so PerfUI can tell a fresh count from a stale one.
+unsigned int g_vpxPerfOffInsertsSkipped = 0;
+unsigned int g_vpxPerfOffInsertsSkippedFrame = ~0u;
+// Light-driven (lightmap) primitive draws actually issued this frame and their triangles. Read by the render thread while
+// it holds m_frameMutex (the logic thread cannot be inside PrepareFrame then) to attribute frame time to lit overlays in
+// the PERF session statistics (renderer/RenderDevice.cpp). Frame-stamped like the counters above.
+unsigned int g_vpxPerfLmDraws = 0, g_vpxPerfLmTris = 0, g_vpxPerfLmFrame = ~0u;
+
+// VPX_PERF_SESSION_DIAG: compile-time switch, default 0 (off), for the perf SESSION diagnostics used in the 2026-09 mobile
+// pipeline work: the "PERF 10s" / "PERF SESSION SUMMARY" logcat lines (renderer/RenderDevice.cpp), the lightmap-group
+// merge/split logcat lines (parts/primitive.cpp) and the extra triage rows of the Full FPS overlay (ui/live/PerfUI.cpp).
+// The same #ifndef block sits in each of those three files: set all three to 1 (or build with -DVPX_PERF_SESSION_DIAG=1).
+#ifndef VPX_PERF_SESSION_DIAG
+#define VPX_PERF_SESSION_DIAG 0
+#endif
+// Lightmap-group merge/split lines: info when the diagnostics are on, debug (dropped by the release logger) when off.
+#if VPX_PERF_SESSION_DIAG
+#define LMGROUP_LOG PLOGI
+#else
+#define LMGROUP_LOG PLOGD
+#endif
+
 ThreadPool *g_pPrimitiveDecompressThreadPool = nullptr;
 
 void Mesh::Clear()
@@ -1058,6 +1082,111 @@ void Primitive::ExportMesh(ObjLoader& loader)
    }
 }
 
+// Two light-driven primitives can share one draw when nothing that reaches the shader or the render state differs: same
+// light (so the same intensity every frame), same texture and material, same blend/depth/lighting flags, no probes, no
+// animation, not part of a collection render group, and neither has ever been split out of a group before.
+bool Primitive::LightmapGroupCompatible(const Primitive& a, const Primitive& b)
+{
+   const PrimitiveData& x = a.m_d;
+   const PrimitiveData& y = b.m_d;
+   const auto inGroupCollection = [](const Primitive& p)
+   {
+      for (const auto collection : p.m_vCollection)
+         if (collection->m_groupElements)
+            return true;
+      return false;
+   };
+   return x.m_use3DMesh && y.m_use3DMesh && !x.m_staticRendering && !y.m_staticRendering
+      && !x.m_szLightmap.empty() && x.m_szLightmap == y.m_szLightmap
+      && a.m_mesh.m_animationFrames.empty() && b.m_mesh.m_animationFrames.empty()
+      && !a.m_lockedByLS && !b.m_lockedByLS && !a.m_lightmapGroupDisabled && !b.m_lightmapGroupDisabled
+      && !a.m_useAsPlayfield && !b.m_useAsPlayfield && !a.m_backglass && !b.m_backglass
+      && x.m_szImage == y.m_szImage && x.m_szMaterial == y.m_szMaterial && x.m_szNormalMap == y.m_szNormalMap
+      && x.m_szReflectionProbe == y.m_szReflectionProbe && x.m_szRefractionProbe == y.m_szRefractionProbe
+      && x.m_addBlend == y.m_addBlend && x.m_useDepthMask == y.m_useDepthMask && x.m_alpha == y.m_alpha && x.m_color == y.m_color
+      && x.m_depthBias == y.m_depthBias && x.m_disableLightingTop == y.m_disableLightingTop && x.m_disableLightingBelow == y.m_disableLightingBelow
+      && x.m_reflectionEnabled == y.m_reflectionEnabled && x.m_backfacesEnabled == y.m_backfacesEnabled && x.m_drawTexturesInside == y.m_drawTexturesInside
+      && x.m_objectSpaceNormalMap == y.m_objectSpaceNormalMap && x.m_reflectionStrength == y.m_reflectionStrength && x.m_refractionThickness == y.m_refractionThickness
+      && !inGroupCollection(a) && !inGroupCollection(b);
+}
+
+// A member's render-relevant state (other than visibility, handled inside the group) differs from the snapshot taken
+// when the group was built. VLM exports the lightmap pieces of movable parts (flippers, slings, bumper rings, targets, ...)
+// pivoted so the script can move them with the mechanism: those pieces must render on their own.
+bool Primitive::LightmapGroupMemberChanged(const LightmapGroupMember& m)
+{
+   const PrimitiveData& d = m.prim->m_d;
+   return d.m_alpha != m.alpha || d.m_color != m.color
+      || d.m_vPosition.x != m.pos.x || d.m_vPosition.y != m.pos.y || d.m_vPosition.z != m.pos.z
+      || d.m_vSize.x != m.size.x || d.m_vSize.y != m.size.y || d.m_vSize.z != m.size.z
+      || memcmp(d.m_aRotAndTra, m.rotAndTra, sizeof(m.rotAndTra)) != 0;
+}
+
+bool Primitive::LightmapGroupDiverged() const
+{
+   for (const LightmapGroupMember& m : m_lightmapGroup)
+      if (LightmapGroupMemberChanged(m))
+         return true;
+   return false;
+}
+
+// Split the changed members out of the group: only THEY are flagged never-merge; every member (leader included) is re-setup
+// at the next frame start, so the unchanged pieces regroup among themselves and the moved/recoloured ones render on their own.
+// Members keep skipping until their re-setup, so nothing draws with a stale buffer. Converges after each movable part's
+// first change (typically the script's init, then the first flip/hit).
+void Primitive::DissolveLightmapGroup()
+{
+   string moved;
+   for (const LightmapGroupMember& m : m_lightmapGroup)
+   {
+      if (LightmapGroupMemberChanged(m))
+      {
+         m.prim->m_lightmapGroupDisabled = true;
+         moved += (moved.empty() ? "" : ", ") + m.prim->GetName();
+      }
+      g_pplayer->m_renderer->ReinitRenderable(m.prim);
+   }
+   LMGROUP_LOG << "Lightmap group '" << GetName() << "' split: " << moved << " changed (script-driven), the other " << m_lightmapGroup.size() << " pieces regroup";
+   m_lightmapGroup.clear();
+}
+
+// Rewrite the merged (dynamic) index buffer with the indices of the currently visible members only.
+void Primitive::RebuildLightmapGroupIndices()
+{
+   const unsigned int vbOffset = m_meshBuffer->m_vb->GetVertexOffset();
+   unsigned int n = 0;
+   if (m_lightmapGroupIndex16)
+   {
+      uint16_t* indices;
+      m_meshBuffer->m_ib->Lock(indices);
+      for (const LightmapGroupMember& m : m_lightmapGroup)
+      {
+         if (!m.visible)
+            continue;
+         const Mesh& mesh = m.prim->m_mesh;
+         for (size_t k = 0; k < mesh.NumIndices(); k++)
+            indices[n + k] = static_cast<uint16_t>(vbOffset + m.vertexOffset + mesh.m_indices[k]);
+         n += static_cast<unsigned int>(mesh.NumIndices());
+      }
+   }
+   else
+   {
+      uint32_t* indices;
+      m_meshBuffer->m_ib->Lock(indices);
+      for (const LightmapGroupMember& m : m_lightmapGroup)
+      {
+         if (!m.visible)
+            continue;
+         const Mesh& mesh = m.prim->m_mesh;
+         for (size_t k = 0; k < mesh.NumIndices(); k++)
+            indices[n + k] = vbOffset + m.vertexOffset + mesh.m_indices[k];
+         n += static_cast<unsigned int>(mesh.NumIndices());
+      }
+   }
+   m_meshBuffer->m_ib->Unlock();
+   m_numGroupIndices = static_cast<int>(n);
+}
+
 void Primitive::RenderSetup(RenderDevice *device)
 {
    assert(m_rd == nullptr);
@@ -1066,6 +1195,7 @@ void Primitive::RenderSetup(RenderDevice *device)
    // Check if we are part of a group, and if so if we are a child or the base
    m_groupdRendering = false;
    m_skipRendering = false;
+   m_lightmapGroup.clear();
    for (const auto collection : m_vCollection)
    {
       if (!collection->m_groupElements)
@@ -1170,6 +1300,78 @@ void Primitive::RenderSetup(RenderDevice *device)
       return;
    }
 
+   // Automatic lightmap group rendering: light-driven primitives that share the same light, texture, material and every
+   // render-relevant flag are merged into ONE mesh buffer owned by the first of them in table order (VLM tables split each
+   // light's lightmap into dozens of 'LM_*' pieces: Fish Tales issues ~300 such draws per frame). Same shader, same blend
+   // state, same intensity, so the merged draw produces the same pixels while the GPU processes tens of draws instead of
+   // hundreds. Member visibility is handled inside the group (dynamic index buffer rebuilt from the visible members, see
+   // RebuildLightmapGroupIndices); any other script change to a member dissolves the group (see LightmapGroupDiverged).
+   if (!m_lightmapGroupDisabled && m_d.m_use3DMesh && !m_d.m_staticRendering && !m_d.m_szLightmap.empty() && m_mesh.m_animationFrames.empty())
+   {
+      vector<Primitive*> prims;
+      size_t overall_size = 0;
+      for (IEditable* const pedit : m_ptable->m_vedit)
+      {
+         if (pedit->GetItemType() != eItemPrimitive)
+            continue;
+         Primitive* const prim = static_cast<Primitive*>(pedit);
+         if (!LightmapGroupCompatible(*this, *prim))
+            continue;
+         prims.push_back(prim);
+         overall_size += prim->m_mesh.NumIndices();
+      }
+      if (prims.size() > 1 && overall_size < 0x7FFFFFFFu)
+      {
+         if (prims[0] != this)
+         {
+            m_skipRendering = true; // drawn as part of the leader's merged mesh
+            return;
+         }
+         // Vertex buffer: every member baked to world space (the leader renders with an identity transform). Dynamic, so it
+         // is not placed at an offset inside a shared static buffer while the index list is rewritten at runtime.
+         m_numGroupVertices = 0;
+         for (const Primitive* const prim : prims)
+            m_numGroupVertices += (int)prim->m_mesh.NumVertices();
+         std::shared_ptr<VertexBuffer> vertexBuffer = std::make_shared<VertexBuffer>(m_rd, m_numGroupVertices, nullptr, true);
+         Vertex3D_NoTex2 *buf;
+         vertexBuffer->Lock(buf);
+         unsigned int ofs = 0;
+         m_lightmapGroup.clear();
+         for (Primitive* const prim : prims)
+         {
+            LightmapGroupMember member = { prim, prim->m_d.m_visible, prim->m_d.m_alpha, prim->m_d.m_color, prim->m_d.m_vPosition, prim->m_d.m_vSize, {}, ofs };
+            memcpy(member.rotAndTra, prim->m_d.m_aRotAndTra, sizeof(member.rotAndTra));
+            m_lightmapGroup.push_back(member);
+            prim->RecalculateMatrices();
+            const Mesh &m = prim->m_mesh;
+            for (size_t t = 0; t < m.NumVertices(); t++)
+            {
+               Vertex3D_NoTex2 vt = m.m_vertices[t];
+               prim->m_fullMatrix.MultiplyVector(vt);
+               const Vertex3Ds n = prim->m_fullMatrix.MultiplyVectorNoTranslateNormal(vt);
+               vt.nx = n.x;
+               vt.ny = n.y;
+               vt.nz = n.z;
+               buf[ofs++] = vt;
+            }
+         }
+         vertexBuffer->Unlock();
+         // Index buffer: dynamic, sized for every member, filled with the visible members only (VLM toggles the pieces baked
+         // for movable parts - flipper up/down, sling arms, targets - by visibility every few frames)
+         m_lightmapGroupIndex16 = overall_size < 65536;
+         std::shared_ptr<IndexBuffer> indexBuffer
+            = std::make_shared<IndexBuffer>(m_rd, static_cast<unsigned int>(overall_size), true, m_lightmapGroupIndex16 ? IndexBuffer::FMT_INDEX16 : IndexBuffer::FMT_INDEX32);
+         m_meshBuffer = std::make_shared<MeshBuffer>(GetName() + ".LightmapGroup"s, vertexBuffer, indexBuffer, true);
+         RebuildLightmapGroupIndices();
+         m_groupdRendering = true;
+         m_lightmap = m_ptable->GetLight(m_d.m_szLightmap);
+         m_currentFrame = -1.f;
+         m_isBackGlassImage = false;
+         LMGROUP_LOG << "Lightmap group '" << GetName() << "': " << prims.size() << " pieces merged into one draw (" << (overall_size / 3) << " triangles, light '" << m_d.m_szLightmap << "', image '" << m_d.m_szImage << "')";
+         return;
+      }
+   }
+
    // Normal mode
    m_lightmap = m_ptable->GetLight(m_d.m_szLightmap);
 
@@ -1200,7 +1402,9 @@ void Primitive::Render(const unsigned int renderMask)
    assert(m_rd != nullptr);
    assert(!m_backglass);
 
-   if (!m_d.m_visible || m_skipRendering)
+   // A merged lightmap group leader renders on behalf of its members: its own visibility is just one member flag
+   const bool isLightmapGroupLeader = m_groupdRendering && !m_lightmapGroup.empty();
+   if (m_skipRendering || (!m_d.m_visible && !isLightmapGroupLeader))
       return;
 
    const bool isStaticOnly = renderMask & Renderer::STATIC_ONLY;
@@ -1208,6 +1412,29 @@ void Primitive::Render(const unsigned int renderMask)
    const bool isReflectionPass = renderMask & Renderer::REFLECTION_PASS;
    const bool isUIPass = renderMask & Renderer::UI_EDGES || renderMask & Renderer::UI_FILL;
    TRACE_FUNCTION();
+
+   // Merged lightmap group: if any member was changed by script, split the group up (nothing is drawn for it this frame;
+   // every member is re-setup at the next frame start and renders individually from then on)
+   if (isLightmapGroupLeader && LightmapGroupDiverged())
+   {
+      DissolveLightmapGroup();
+      return;
+   }
+   if (isLightmapGroupLeader)
+   {
+      // Member visibility toggled by script: rewrite the merged index list from the visible members
+      bool visibilityChanged = false;
+      for (LightmapGroupMember& m : m_lightmapGroup)
+         if (m.prim->m_d.m_visible != m.visible)
+         {
+            m.visible = m.prim->m_d.m_visible;
+            visibilityChanged = true;
+         }
+      if (visibilityChanged)
+         RebuildLightmapGroupIndices();
+      if (m_numGroupIndices == 0)
+         return; // no member visible
+   }
 
    // Update playfield primitive settings from table settings
    SamplerFilter pinf = SF_UNDEFINED; // Use the default filtering of the sampler (trilinear or anisotropic, depending on user choice)
@@ -1281,6 +1508,24 @@ void Primitive::Render(const unsigned int renderMask)
    if (!isUIPass && m_d.m_addBlend && (m_d.m_color == 0 || alpha == 0.f))
       return;
 
+   // Light-driven insert (lightmap primitive) whose light is fully off: alpha is exactly 0 (an off light has zero
+   // intensity: the fader clamps to the target and the incandescent model emits 0 below 1500K), alpha blending is the
+   // default render state and the basic shader multiplies its output by staticColor_Alpha, so the draw changes no pixel.
+   // Skip it instead of paying the material/texture setup, the draw call and the fragment shading (hundreds per frame on
+   // insert-heavy tables, most inserts being off at any moment). The only difference is the depth write of an invisible
+   // coplanar overlay, which has no visible consumer (balls are drawn before transparents, parts above it pass the depth
+   // test anyway). Not applied in editor UI passes nor in the static prepass (a static prim bakes once; keep that as is).
+   if (!isUIPass && !isStaticOnly && m_lightmap != nullptr && alpha == 0.f)
+   {
+      if (g_vpxPerfOffInsertsSkippedFrame != g_pplayer->m_overall_frames)
+      {
+         g_vpxPerfOffInsertsSkippedFrame = g_pplayer->m_overall_frames;
+         g_vpxPerfOffInsertsSkipped = 0;
+      }
+      g_vpxPerfOffInsertsSkipped++;
+      return;
+   }
+
    if (m_groupdRendering)
       m_fullMatrix.SetIdentity();
    else
@@ -1308,6 +1553,13 @@ void Primitive::Render(const unsigned int renderMask)
       return;
    }
 
+   if (m_lightmap != nullptr && !isStaticOnly)
+   { // perf attribution: this lightmap overlay is about to be drawn (see g_vpxPerfLm* above)
+      if (g_vpxPerfLmFrame != g_pplayer->m_overall_frames) { g_vpxPerfLmFrame = g_pplayer->m_overall_frames; g_vpxPerfLmDraws = 0; g_vpxPerfLmTris = 0; }
+      g_vpxPerfLmDraws++;
+      g_vpxPerfLmTris += (m_groupdRendering ? m_numGroupIndices : static_cast<uint32_t>(m_mesh.NumIndices())) / 3u;
+   }
+
    m_rd->ResetRenderState();
 
    // Request probes before setting up state since this can trigger a renderprobe update which modifies the render state
@@ -1324,6 +1576,14 @@ void Primitive::Render(const unsigned int renderMask)
 
    // Force disable light from below for objects marked as static since there is no light from below during pre-render pass (to get the same result in dynamic mode & static mode)
    m_rd->m_basicShader->SetVector(SHADER_fDisableLighting_top_below, m_d.m_disableLightingTop, m_d.m_staticRendering ? 1.0f : m_d.m_disableLightingBelow, 0.f, 0.f);
+
+   // Lightmap overlays (VLM 'LM_*' pieces, Flupper-style inserts): sample with trilinear instead of the default anisotropic
+   // filter. These are unlit additive/blended glows with low-frequency content, so anisotropy adds little, while at the
+   // playfield's grazing view angle the default 16x anisotropic sampler costs up to 16 bilinear taps per pixel on every
+   // overlay - on a VLM table that is hundreds of overlapping HDR-textured overlays per frame. Bake meshes and the playfield
+   // keep the default filter so the artwork is untouched. Not applied when the caller already forced a filter (playfield).
+   if (pinf == SF_UNDEFINED && m_lightmap != nullptr)
+      pinf = SF_TRILINEAR;
 
    // Select textures, replacing backglass image by capture if it is available
    Texture * const nMap = m_ptable->GetImage(m_d.m_szNormalMap);
