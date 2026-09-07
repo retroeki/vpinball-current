@@ -2633,7 +2633,15 @@ bool PinTable::LoadToken(const int id, BiffReader * const pbr)
    case FID(BPRS): pbr->GetFloat(m_ballPlayfieldReflectionStrength); break;
    case FID(DBIS): pbr->GetFloat(m_defaultBulbIntensityScaleOnBall); break;
    case FID(UAAL):
-      if (hasIni) // Before 10.8, user tweaks were stored in the table file (now moved to a user ini file), we import the legacy settings if there is no user ini file
+      // Android: never import the table author's legacy "Enable Anti-Aliasing" checkbox.
+      // It maps to a per-table Player/AAFactor override of 1.0 or 2.0 that silently beats
+      // the app's Performance Preset (Battery 0.5 / Balanced 0.75 / Quality 1.0): a ticked
+      // box made Checkpoint render at 2x supersampling (2160x5280 on a 1080 phone) and
+      // shrank the embedded ScoreView, which is sized in render-buffer pixels, to a third of
+      // the screen. 22 of 635 corpus tables carry the flag. Any in-game settings save then
+      // persisted the override into the table ini; the app strips that key before launch.
+      // (Note the `hasIni` test is also inverted relative to the sibling legacy imports.)
+      if (hasIni && !g_isAndroid) // Before 10.8, user tweaks were stored in the table file (now moved to a user ini file), we import the legacy settings if there is no user ini file
       {
          int useAA;
          pbr->GetInt(useAA);

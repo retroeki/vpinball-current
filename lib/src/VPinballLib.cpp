@@ -70,10 +70,17 @@ MSGPI_EXPORT void MSGPIAPI UpscaleDMDPluginUnload();
 static std::atomic<int> g_pupVideoSourceWidth{0};
 static std::atomic<int> g_pupVideoSourceHeight{0};
 
+// Fires VPINBALL_EVENT_SCOREVIEW_SOURCE_SIZE when the size the host would read back
+// (ScoreView layout first, PUP video as fallback) changes to a new non-zero value, so the
+// app can re-fit its DMD box instead of trusting a one-shot probe at table start.
+// Defined below the ScoreView size globals it also reads.
+static void NotifyScoreViewSourceSizeIfChanged();
+
 extern "C" void SetPUPVideoSourceSize(int width, int height)
 {
    g_pupVideoSourceWidth = width;
    g_pupVideoSourceHeight = height;
+   NotifyScoreViewSourceSizeIfChanged();
 }
 
 static void GetPUPVideoSourceSize(int& width, int& height)
@@ -108,6 +115,33 @@ extern "C" void SetScoreViewSourceSize(int width, int height)
 {
    g_scoreViewSourceWidth = width;
    g_scoreViewSourceHeight = height;
+   NotifyScoreViewSourceSizeIfChanged();
+}
+
+// Both setters run on the render thread once per frame, so this stays cheap: a few
+// atomic loads and one compare; the event only fires on an actual change. No payload:
+// the app re-queries VPinballGetScoreViewSourceSize, which applies the same
+// layout-then-PUP preference used here. Transitions to 0x0 (layout unresolved between
+// re-selects, PUP screen idle) are NOT reported: the app would only fall back to a
+// default aspect, and the next real size re-fits the box anyway.
+static void NotifyScoreViewSourceSizeIfChanged()
+{
+   static std::atomic<int> s_lastNotifiedWidth{0};
+   static std::atomic<int> s_lastNotifiedHeight{0};
+   int w = g_scoreViewSourceWidth.load();
+   int h = g_scoreViewSourceHeight.load();
+   if (w <= 0 || h <= 0)
+   {
+      w = g_pupVideoSourceWidth.load();
+      h = g_pupVideoSourceHeight.load();
+   }
+   if (w <= 0 || h <= 0)
+      return;
+   if (w == s_lastNotifiedWidth.load() && h == s_lastNotifiedHeight.load())
+      return;
+   s_lastNotifiedWidth = w;
+   s_lastNotifiedHeight = h;
+   VPinballLib::VPinballLib::SendEvent(VPINBALL_EVENT_SCOREVIEW_SOURCE_SIZE, nullptr);
 }
 
 // Whether the ScoreView is currently rendering the live EM reel / char-display image

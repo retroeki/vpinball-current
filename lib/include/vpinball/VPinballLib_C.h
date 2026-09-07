@@ -52,7 +52,11 @@ typedef enum {
    VPINBALL_EVENT_FATAL_ERROR, // Unrecoverable error (GPU/shader/crash) - player will close after this
    // Per-chunk web-server upload progress. Fires once per /upload POST so
    // hosts can render an in-flight indicator on the matching library row.
-   VPINBALL_EVENT_WEB_UPLOAD
+   VPINBALL_EVENT_WEB_UPLOAD,
+   // The ScoreView's source size (chosen layout, or PUP video as fallback) changed to a
+   // new non-zero value. No payload: hosts re-query VPinballGetScoreViewSourceSize and
+   // re-fit the embedded DMD box, instead of trusting a one-shot probe at table start.
+   VPINBALL_EVENT_SCOREVIEW_SOURCE_SIZE
 } VPINBALL_EVENT;
 
 // Callbacks
