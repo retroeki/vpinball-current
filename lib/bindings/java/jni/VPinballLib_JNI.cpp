@@ -469,6 +469,11 @@ JNIEXPORT jfloat JNICALL Java_org_vpinball_app_jni_VPinballJNI_VPinballGetViewSc
    return VPinballGetViewScaleY();
 }
 
+JNIEXPORT jint JNICALL Java_org_vpinball_app_jni_VPinballJNI_VPinballCommitLiveTweaks(JNIEnv* env, jobject obj)
+{
+   return VPinballCommitLiveTweaks();
+}
+
 JNIEXPORT jint JNICALL Java_org_vpinball_app_jni_VPinballJNI_VPinballGetViewMode(JNIEnv* env, jobject obj)
 {
    return VPinballGetViewMode();

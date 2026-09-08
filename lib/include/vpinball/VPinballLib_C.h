@@ -147,6 +147,9 @@ VPINBALLAPI VPINBALL_STATUS VPinballSetViewScaleX(float scaleX);   // Scene scal
 VPINBALLAPI float VPinballGetViewScaleX();
 VPINBALLAPI VPINBALL_STATUS VPinballSetViewScaleY(float scaleY);   // Scene scale along playfield height axis (0.5-1.5, default 1)
 VPINBALLAPI float VPinballGetViewScaleY();
+// Call when the camera / lighting editing UI closes: re-enables the static prepass the live setters suspended
+// (it re-renders once with the final values). No-op when nothing was tweaked.
+VPINBALLAPI VPINBALL_STATUS VPinballCommitLiveTweaks();
 
 // Table Info
 

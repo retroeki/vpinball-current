@@ -349,6 +349,11 @@ VPINBALLAPI float VPinballGetViewScaleY()
    return VPinballLib::VPinballLib::Instance().GetViewScaleY();
 }
 
+VPINBALLAPI VPINBALL_STATUS VPinballCommitLiveTweaks()
+{
+   return VPinballLib::VPinballLib::Instance().CommitLiveTweaks();
+}
+
 VPINBALLAPI VPINBALL_VIEW_MODE VPinballGetViewMode()
 {
    return VPinballLib::VPinballLib::Instance().GetViewMode();

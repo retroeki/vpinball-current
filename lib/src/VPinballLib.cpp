@@ -947,7 +947,7 @@ VPINBALL_STATUS VPinballLib::ResetTableIni()
    if (g_pplayer->m_renderer)
    {
       g_pplayer->m_renderer->m_sceneLighting.SetMode(Renderer::SceneLighting::Mode::Table);
-      g_pplayer->m_renderer->DisableStaticPrePass(true);
+      SuspendStaticPrepassForLiveTweak();
       g_pplayer->m_renderer->MarkShaderDirty();
    }
 
@@ -1292,7 +1292,7 @@ VPINBALL_STATUS VPinballLib::SetEmissionScale(float scale)
    g_pplayer->m_ptable->m_globalEmissionScale = scale;
 
    // Trigger renderer update (same as MiscSettingsPage::RequestDynamicRendererUpdate)
-   g_pplayer->m_renderer->DisableStaticPrePass(true);
+   SuspendStaticPrepassForLiveTweak();
    g_pplayer->m_renderer->MarkShaderDirty();
 
    return VPINBALL_STATUS_SUCCESS;
@@ -1323,7 +1323,7 @@ VPINBALL_STATUS VPinballLib::SetFOV(float fov)
    viewSetup.mFOV = fov;
 
    // Disable static pre-pass for live preview (like the in-game UI does)
-   g_pplayer->m_renderer->DisableStaticPrePass(true);
+   SuspendStaticPrepassForLiveTweak();
    // Trigger renderer update to apply changes live
    g_pplayer->m_renderer->InitLayout();
 
@@ -1353,7 +1353,7 @@ VPINBALL_STATUS VPinballLib::SetLookAt(float lookAt)
    viewSetup.mLookAt = lookAt;
 
    // Disable static pre-pass for live preview (like the in-game UI does)
-   g_pplayer->m_renderer->DisableStaticPrePass(true);
+   SuspendStaticPrepassForLiveTweak();
    // Trigger renderer update to apply changes live
    g_pplayer->m_renderer->InitLayout();
 
@@ -1382,7 +1382,7 @@ VPINBALL_STATUS VPinballLib::SetLayback(float layback)
    viewSetup.mLayback = layback;
 
    // Disable static pre-pass for live preview (like the in-game UI does)
-   g_pplayer->m_renderer->DisableStaticPrePass(true);
+   SuspendStaticPrepassForLiveTweak();
    // Trigger renderer update to apply changes live
    g_pplayer->m_renderer->InitLayout();
 
@@ -1406,7 +1406,7 @@ VPINBALL_STATUS VPinballLib::SetViewX(float x)
    ViewSetup& viewSetup = g_pplayer->m_ptable->GetViewSetup();
    viewSetup.mViewX = CMTOVPU(x);
 
-   g_pplayer->m_renderer->DisableStaticPrePass(true);
+   SuspendStaticPrepassForLiveTweak();
    g_pplayer->m_renderer->InitLayout();
 
    return VPINBALL_STATUS_SUCCESS;
@@ -1429,7 +1429,7 @@ VPINBALL_STATUS VPinballLib::SetViewY(float y)
    ViewSetup& viewSetup = g_pplayer->m_ptable->GetViewSetup();
    viewSetup.mViewY = CMTOVPU(y);
 
-   g_pplayer->m_renderer->DisableStaticPrePass(true);
+   SuspendStaticPrepassForLiveTweak();
    g_pplayer->m_renderer->InitLayout();
 
    return VPINBALL_STATUS_SUCCESS;
@@ -1452,7 +1452,7 @@ VPINBALL_STATUS VPinballLib::SetViewZ(float z)
    ViewSetup& viewSetup = g_pplayer->m_ptable->GetViewSetup();
    viewSetup.mViewZ = CMTOVPU(z);
 
-   g_pplayer->m_renderer->DisableStaticPrePass(true);
+   SuspendStaticPrepassForLiveTweak();
    g_pplayer->m_renderer->InitLayout();
 
    return VPINBALL_STATUS_SUCCESS;
@@ -1478,7 +1478,7 @@ VPINBALL_STATUS VPinballLib::SetViewScaleX(float scaleX)
    ViewSetup& viewSetup = g_pplayer->m_ptable->GetViewSetup();
    viewSetup.mSceneScaleX = scaleX;
 
-   g_pplayer->m_renderer->DisableStaticPrePass(true);
+   SuspendStaticPrepassForLiveTweak();
    g_pplayer->m_renderer->InitLayout();
 
    return VPINBALL_STATUS_SUCCESS;
@@ -1504,9 +1504,39 @@ VPINBALL_STATUS VPinballLib::SetViewScaleY(float scaleY)
    ViewSetup& viewSetup = g_pplayer->m_ptable->GetViewSetup();
    viewSetup.mSceneScaleY = scaleY;
 
-   g_pplayer->m_renderer->DisableStaticPrePass(true);
+   SuspendStaticPrepassForLiveTweak();
    g_pplayer->m_renderer->InitLayout();
 
+   return VPINBALL_STATUS_SUCCESS;
+}
+
+void VPinballLib::SuspendStaticPrepassForLiveTweak()
+{
+   if (!g_pplayer || !g_pplayer->m_renderer)
+      return;
+   if (m_liveTweakPrepassSuspended && m_liveTweakPlayer == g_pplayer)
+      return; // already suspended for this player
+   // Mirrors the in-game UI: while a settings/camera page is open the scene renders fully dynamic so the change is
+   // visible at once. Upstream re-enables the prepass when the page closes; here that is CommitLiveTweaks().
+   g_pplayer->m_renderer->DisableStaticPrePass(true);
+   m_liveTweakPrepassSuspended = true;
+   m_liveTweakPlayer = g_pplayer;
+}
+
+VPINBALL_STATUS VPinballLib::CommitLiveTweaks()
+{
+   if (!m_liveTweakPrepassSuspended)
+      return VPINBALL_STATUS_SUCCESS;
+   m_liveTweakPrepassSuspended = false;
+   if (!g_pplayer || !g_pplayer->m_renderer || m_liveTweakPlayer != g_pplayer)
+   {
+      m_liveTweakPlayer = nullptr;
+      return VPINBALL_STATUS_SUCCESS; // that player is gone, its renderer went with it
+   }
+   m_liveTweakPlayer = nullptr;
+   // Back to +0 on the counter: the static prepass is dirty again and re-renders once, with the committed values, on the
+   // next frame (a "Prerendering static parts" pass, so a short stall right after the editing UI closes).
+   g_pplayer->m_renderer->DisableStaticPrePass(false);
    return VPINBALL_STATUS_SUCCESS;
 }
 

@@ -151,6 +151,10 @@ public:
    float GetViewScaleX();
    VPINBALL_STATUS SetViewScaleY(float scaleY);   // Scene scale along playfield depth axis (0.5-1.5)
    float GetViewScaleY();
+   // Live tweak session end. The camera / lighting setters above switch the renderer to fully dynamic rendering
+   // (static prepass suspended) so every change shows immediately; call this when the editing UI closes to
+   // re-enable the static prepass, which then re-renders once with the final values. No-op when nothing was tweaked.
+   VPINBALL_STATUS CommitLiveTweaks();
    string GetTableName();
    string GetTableVersion();
    VPINBALL_VIEW_MODE GetViewMode();
@@ -176,6 +180,13 @@ private:
    VPinballLib& operator=(const VPinballLib&) = delete;
    void SetEventCallback(VPinballEventCallback callback);
    static void RegisterStaticPlugins();
+
+   // Static prepass suspension shared by the live camera / lighting setters (see CommitLiveTweaks). Balanced +1/-1 on the
+   // renderer's DisableStaticPrePass counter, at most once per player; the player pointer guards against a stale flag
+   // after a table change.
+   void SuspendStaticPrepassForLiveTweak();
+   bool m_liveTweakPrepassSuspended = false;
+   const void* m_liveTweakPlayer = nullptr;
 
    SDL_Window* m_pWindow = nullptr;
 #ifdef __APPLE__
