@@ -263,7 +263,6 @@ enum ShaderTechniques
    SHADER_TECHNIQUE(fb_bloom, SHADER_w_h_height, SHADER_tex_fb_filtered),
    SHADER_TECHNIQUE(fb_mirror, SHADER_w_h_height, SHADER_tex_fb_unfiltered),
    SHADER_TECHNIQUE(fb_copy, SHADER_w_h_height, SHADER_tex_fb_filtered),
-   SHADER_TECHNIQUE(fb_copy_depth, SHADER_w_h_height, SHADER_tex_fb_filtered, SHADER_tex_depth), // static prepass composite: colour + depth copy (non stereo)
    SHADER_TECHNIQUE(fb_sgsr, SHADER_w_h_height, SHADER_tex_fb_filtered), // Snapdragon Game Super Resolution 1 spatial upscaler (non stereo)
    SHADER_TECHNIQUE(SSReflection, SHADER_w_h_height, SHADER_SSR_bumpHeight_fresnelRefl_scale_FS, SHADER_tex_fb_filtered, SHADER_tex_depth, SHADER_tex_ao_dither),
 

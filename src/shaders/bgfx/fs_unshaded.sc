@@ -1,11 +1,6 @@
 // license:GPLv3+
 
-#ifdef LEAN
-// paired with vs_unshaded.sc: only the interpolants this shader reads
-$input v_tablePos, v_texcoord0
-#else
 $input v_worldPos, v_tablePos, v_normal, v_texcoord0
-#endif
 #ifdef STEREO
 	$input v_eye
 #endif

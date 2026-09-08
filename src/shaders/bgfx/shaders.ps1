@@ -78,7 +78,6 @@ if ($gen_basic)
 	  for($k = 0; $k -lt 2; $k++)
 	  {
 		Process-Shader "vs_basic.sc" "basic.h" ("vs_kicker_" + $variant2.ToLower() + $stOutput[$k]) "vertex" @($stereo[$k], $variant2, "KICKER")
-		if ($k -eq 0) { Process-Shader "vs_unshaded.sc" "basic.h" ("vs_unshaded_" + $variant2.ToLower() + "_") "vertex" @("NOSTEREO", $variant2) } # lean unshaded VS (non stereo)
 		Process-Shader "fs_basic.sc" "basic.h" ("fs_basic_refl_" + $variant2.ToLower() + $stOutput[$k]) "fragment" @($stereo[$k], $variant2, "REFL")
 		foreach ($variant in @("TEX", "NOTEX"))
 		{
@@ -90,8 +89,6 @@ if ($gen_basic)
 		  Process-Shader "fs_classic_light.sc" "basic.h" ("fs_classic_light_" + $variant.ToLower() + "_" + $variant2.ToLower() + $stOutput[$k]) "fragment" @($stereo[$k], $variant, $variant2, "NOSHADOW")
 		  Process-Shader "fs_unshaded.sc"      "basic.h" ("fs_unshaded_" + $variant.ToLower() + "_" + $variant2.ToLower() + $stOutput[$k]) "fragment" @($stereo[$k], $variant, $variant2, "NOSHADOW")
 		  Process-Shader "fs_unshaded.sc"      "basic.h" ("fs_unshaded_" + $variant.ToLower() + "_ballshadow_" + $variant2.ToLower() + $stOutput[$k]) "fragment" @($stereo[$k], $variant, $variant2, "SHADOW")
-		  if ($k -eq 0) { Process-Shader "fs_unshaded.sc" "basic.h" ("fs_unshaded_lean_" + $variant.ToLower() + "_" + $variant2.ToLower() + "_") "fragment" @("NOSTEREO", $variant, $variant2, "NOSHADOW", "LEAN") } # lean unshaded FS (non stereo)
-		  if ($k -eq 0) { Process-Shader "fs_unshaded.sc" "basic.h" ("fs_unshaded_lean_" + $variant.ToLower() + "_ballshadow_" + $variant2.ToLower() + "_") "fragment" @("NOSTEREO", $variant, $variant2, "SHADOW", "LEAN") }
 		}
 	  }
 	}
@@ -213,7 +210,6 @@ if ($gen_postprocess)
 	  Process-Shader "vs_postprocess.sc" "postprocess.h" ("vs_postprocess" + $stOutput[$k]) "vertex" @($stereo[$k])
 	  Process-Shader "fs_pp_mirror.sc" "postprocess.h" ("fs_pp_mirror" + $stOutput[$k]) "fragment" @($stereo[$k])
 	  Process-Shader "fs_pp_copy.sc" "postprocess.h" ("fs_pp_copy" + $stOutput[$k]) "fragment" @($stereo[$k])
-	  if ($k -eq 0) { Process-Shader "fs_pp_copy_depth.sc" "postprocess.h" "fs_pp_copy_depth_" "fragment" @("NOSTEREO") } # static prepass composite (non stereo)
 	  if ($k -eq 0) { Process-Shader "fs_pp_sgsr.sc" "postprocess.h" "fs_pp_sgsr_" "fragment" @("NOSTEREO") } # SGSR 1 spatial upscaler (non stereo)
 	  Process-Shader "fs_pp_bloom.sc" "postprocess.h" ("fs_pp_bloom" + $stOutput[$k]) "fragment" @($stereo[$k])
 	  Process-Shader "fs_pp_irradiance.sc" "postprocess.h" ("fs_pp_irradiance" + $stOutput[$k]) "fragment" @($stereo[$k])

@@ -2981,7 +2981,7 @@ void Renderer::RenderFrame()
       m_renderDevice->SetRenderTarget("Render Scene"s, GetMSAABackBufferTexture());
       m_renderDevice->AddRenderTargetDependency(m_staticPrepassRT);
       // Copy the prepass (colour + depth) into the scene target with a blit. A fullscreen quad rewriting the depth through
-      // gl_FragDepth (technique fb_copy_depth, 2026-09-07) produced horizontal z-fight stripes on Mali GPUs: the coplanar
+      // gl_FragDepth (tried 2026-09-07, removed) produced horizontal z-fight stripes on Mali GPUs: the coplanar
       // lightmap overlays failed the LESSEQUAL test on alternate rows against the rewritten depth (2026-09-08, Fish Tales VPW;
       // stripes vanish as soon as the static prepass is disabled). The blit copies depth bit-exactly on every GPU and its
       // measured cost difference on the reference phone was within noise, so the quad path is not used.

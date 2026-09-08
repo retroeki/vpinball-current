@@ -87,7 +87,6 @@ if [ "$gen_basic" = true ]; then
         for k in 0 1; do
             variant2_lower=$(echo "$variant2" | tr '[:upper:]' '[:lower:]')
             process_shader "vs_basic.sc" "basic.h" "vs_kicker_${variant2_lower}${st_output[$k]}" "vertex" "${stereo[$k]}" "$variant2" "KICKER"
-            [ "$k" -eq 0 ] && process_shader "vs_unshaded.sc" "basic.h" "vs_unshaded_${variant2,,}_" "vertex" "NOSTEREO;${variant2}" # lean unshaded VS (non stereo)
             process_shader "fs_basic.sc" "basic.h" "fs_basic_refl_${variant2_lower}${st_output[$k]}" "fragment" "${stereo[$k]}" "$variant2" "REFL"
             for variant in "TEX" "NOTEX"; do
                 variant_lower=$(echo "$variant" | tr '[:upper:]' '[:lower:]')
@@ -99,8 +98,6 @@ if [ "$gen_basic" = true ]; then
                 process_shader "fs_classic_light.sc" "basic.h" "fs_classic_light_${variant_lower}_${variant2_lower}${st_output[$k]}" "fragment" "${stereo[$k]}" "$variant" "$variant2" "NOSHADOW"
                 process_shader "fs_unshaded.sc" "basic.h" "fs_unshaded_${variant_lower}_${variant2_lower}${st_output[$k]}" "fragment" "${stereo[$k]}" "$variant" "$variant2" "NOSHADOW"
                 process_shader "fs_unshaded.sc" "basic.h" "fs_unshaded_${variant_lower}_ballshadow_${variant2_lower}${st_output[$k]}" "fragment" "${stereo[$k]}" "$variant" "$variant2" "SHADOW"
-                [ "$k" -eq 0 ] && process_shader "fs_unshaded.sc" "basic.h" "fs_unshaded_lean_${variant,,}_${variant2,,}_" "fragment" "NOSTEREO;${variant};${variant2};NOSHADOW;LEAN" # lean unshaded FS (non stereo)
-                [ "$k" -eq 0 ] && process_shader "fs_unshaded.sc" "basic.h" "fs_unshaded_lean_${variant,,}_ballshadow_${variant2,,}_" "fragment" "NOSTEREO;${variant};${variant2};SHADOW;LEAN"
             done
         done
     done
@@ -211,7 +208,6 @@ if [ "$gen_postprocess" = true ]; then
         process_shader "vs_postprocess.sc" "postprocess.h" "vs_postprocess${st_output[$k]}" "vertex" "${stereo[$k]}"
         process_shader "fs_pp_mirror.sc" "postprocess.h" "fs_pp_mirror${st_output[$k]}" "fragment" "${stereo[$k]}"
         process_shader "fs_pp_copy.sc" "postprocess.h" "fs_pp_copy${st_output[$k]}" "fragment" "${stereo[$k]}"
-        [ "$k" -eq 0 ] && process_shader "fs_pp_copy_depth.sc" "postprocess.h" "fs_pp_copy_depth_" "fragment" "NOSTEREO" # static prepass composite (non stereo)
         [ "$k" -eq 0 ] && process_shader "fs_pp_sgsr.sc" "postprocess.h" "fs_pp_sgsr_" "fragment" "NOSTEREO" # SGSR 1 spatial upscaler (non stereo)
         process_shader "fs_pp_bloom.sc" "postprocess.h" "fs_pp_bloom${st_output[$k]}" "fragment" "${stereo[$k]}"
         process_shader "fs_pp_irradiance.sc" "postprocess.h" "fs_pp_irradiance${st_output[$k]}" "fragment" "${stereo[$k]}"

@@ -267,7 +267,6 @@ Shader::TechniqueDef Shader::shaderTechniqueNames[SHADER_TECHNIQUE_COUNT] {
    SHADER_TECHNIQUE(fb_bloom, SHADER_w_h_height, SHADER_tex_fb_filtered),
    SHADER_TECHNIQUE(fb_mirror, SHADER_w_h_height, SHADER_tex_fb_unfiltered),
    SHADER_TECHNIQUE(fb_copy, SHADER_w_h_height, SHADER_tex_fb_filtered),
-   SHADER_TECHNIQUE(fb_copy_depth, SHADER_w_h_height, SHADER_tex_fb_filtered, SHADER_tex_depth), // static prepass composite: colour + depth copy (non stereo)
    SHADER_TECHNIQUE(fb_sgsr, SHADER_w_h_height, SHADER_tex_fb_filtered), // Snapdragon Game Super Resolution 1 spatial upscaler (non stereo)
    SHADER_TECHNIQUE(SSReflection, SHADER_w_h_height, SHADER_SSR_bumpHeight_fresnelRefl_scale_FS, SHADER_tex_fb_filtered, SHADER_tex_depth, SHADER_tex_ao_dither),
 
@@ -1403,17 +1402,6 @@ void Shader::Load()
       BGFX_EMBEDDED_SHADER_ST_CLIP(fs_unshaded_notex_ballshadow),
       BGFX_EMBEDDED_SHADER_ST_CLIP(fs_unshaded_tex),
       BGFX_EMBEDDED_SHADER_ST_CLIP(fs_unshaded_tex_ballshadow),
-      // Lean unshaded path (non stereo): position-only vertex shader + matching fragment inputs
-      BGFX_EMBEDDED_SHADER(vs_unshaded_clip),
-      BGFX_EMBEDDED_SHADER(vs_unshaded_noclip),
-      BGFX_EMBEDDED_SHADER(fs_unshaded_lean_notex_clip),
-      BGFX_EMBEDDED_SHADER(fs_unshaded_lean_notex_noclip),
-      BGFX_EMBEDDED_SHADER(fs_unshaded_lean_notex_ballshadow_clip),
-      BGFX_EMBEDDED_SHADER(fs_unshaded_lean_notex_ballshadow_noclip),
-      BGFX_EMBEDDED_SHADER(fs_unshaded_lean_tex_clip),
-      BGFX_EMBEDDED_SHADER(fs_unshaded_lean_tex_noclip),
-      BGFX_EMBEDDED_SHADER(fs_unshaded_lean_tex_ballshadow_clip),
-      BGFX_EMBEDDED_SHADER(fs_unshaded_lean_tex_ballshadow_noclip),
       BGFX_EMBEDDED_SHADER(vs_vr_mask),
       // Ball shaders
       BGFX_EMBEDDED_SHADER_ST_CLIP(vs_ball),
@@ -1484,7 +1472,6 @@ void Shader::Load()
       BGFX_EMBEDDED_SHADER_ST(fs_pp_bloom),
       BGFX_EMBEDDED_SHADER_ST(fs_pp_mirror),
       BGFX_EMBEDDED_SHADER_ST(fs_pp_copy),
-      BGFX_EMBEDDED_SHADER(fs_pp_copy_depth),
       BGFX_EMBEDDED_SHADER(fs_pp_sgsr),
       BGFX_EMBEDDED_SHADER_ST(fs_pp_ssr),
       BGFX_EMBEDDED_SHADER_ST(fs_pp_irradiance),
@@ -1547,10 +1534,9 @@ void Shader::Load()
       loadProgram(embeddedShaders, SHADER_TECHNIQUE_kickerBoolean,            STEREO(vs_kicker_noclip),              STEREO(fs_basic_notex_noat_noclip));
       // Unshaded (additive/unlit) techniques share vs_basic with the lit techniques ON PURPOSE: lightmap overlays are coplanar
       // with the bake meshes they sit on and pass a LESSEQUAL depth test only if both draws produce bit-identical depth. Neither
-      // GLSL nor SPIR-V guarantees that across two different vertex shaders (no Invariant decoration through the bgfx HLSL
-      // front-end), and Mali compiles the same mul(matWorldViewProj, pos) differently in vs_unshaded vs vs_basic -> horizontal
-      // z-fight stripes over the whole playfield (2026-09-08, Fish Tales VPW). The lean vs_unshaded / fs_unshaded_lean pair
-      // stays compiled and embedded but unused (measured 0-1 ms, noise floor).
+      // GLSL nor SPIR-V guarantees that across two different vertex shaders (no Invariant decoration is available through the
+      // bgfx HLSL front-end), so a position-only vertex shader for these techniques is a z-fighting risk on GPUs whose compilers
+      // do not happen to emit identical code (tried 2026-09-07, removed 2026-09-08: no measurable gain).
       loadProgram(embeddedShaders, SHADER_TECHNIQUE_unshaded_without_texture, STEREO(vs_basic_notex_noclip),         STEREO(fs_unshaded_notex_noclip));
       loadProgram(embeddedShaders, SHADER_TECHNIQUE_unshaded_with_texture,    STEREO(vs_basic_tex_noclip),           STEREO(fs_unshaded_tex_noclip));
       loadProgram(embeddedShaders, SHADER_TECHNIQUE_unshaded_without_texture_shadow, STEREO(vs_basic_notex_noclip),  STEREO(fs_unshaded_notex_ballshadow_noclip));
@@ -1671,8 +1657,7 @@ void Shader::Load()
       loadProgram(embeddedShaders, SHADER_TECHNIQUE_fb_bloom, STEREO(vs_postprocess), STEREO(fs_pp_bloom));
       loadProgram(embeddedShaders, SHADER_TECHNIQUE_fb_mirror, STEREO(vs_postprocess), STEREO(fs_pp_mirror));
       loadProgram(embeddedShaders, SHADER_TECHNIQUE_fb_copy, STEREO(vs_postprocess), STEREO(fs_pp_copy));
-      // Non-stereo techniques (their users are gated on STEREO_OFF); the stereo build maps them to the plain copy so the program table stays complete
-      loadProgram(embeddedShaders, SHADER_TECHNIQUE_fb_copy_depth, STEREO(vs_postprocess), m_isStereo ? fs_pp_copy_st.name : "fs_pp_copy_depth");
+      // Non-stereo technique (its users are gated on STEREO_OFF); the stereo build maps it to the plain copy so the program table stays complete
       loadProgram(embeddedShaders, SHADER_TECHNIQUE_fb_sgsr, STEREO(vs_postprocess), m_isStereo ? fs_pp_copy_st.name : "fs_pp_sgsr");
       loadProgram(embeddedShaders, SHADER_TECHNIQUE_SSReflection, STEREO(vs_postprocess), STEREO(fs_pp_ssr));
       loadProgram(embeddedShaders, SHADER_TECHNIQUE_irradiance, STEREO(vs_postprocess), STEREO(fs_pp_irradiance));
