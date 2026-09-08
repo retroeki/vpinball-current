@@ -25,6 +25,9 @@ public:
    // capture engine objects (Ball*, RenderDevice*) by pointer and must not survive to run on a
    // later frame after those objects were freed (see Ball::Render begin-of-frame command).
    void ClearDeferredCommands() { m_beginOfFrameCmds.clear(); m_endOfFrameCmds.clear(); }
+   // Drop only the begin-of-frame commands, keeping end-of-frame ones (which release resources,
+   // e.g. the reflection probe accumulation surface, and must still run on the next Execute).
+   void ClearBeginOfFrameCommands() { m_beginOfFrameCmds.clear(); }
    bool Execute(const bool log = false);
    void Discard();
 

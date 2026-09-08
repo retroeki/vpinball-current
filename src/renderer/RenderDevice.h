@@ -128,6 +128,7 @@ public:
    void DrawGaussianBlur(RenderTarget* source, RenderTarget* tmp, RenderTarget* dest, float kernel_size, int singleLayer = -1);
    void AddBeginOfFrameCmd(const std::function<void()>& cmd) { m_renderFrame->AddBeginOfFrameCmd(cmd); }
    void AddEndOfFrameCmd(const std::function<void()>& cmd) { m_renderFrame->AddEndOfFrameCmd(cmd); }
+   void ClearBeginOfFrameCmds() { m_renderFrame->ClearBeginOfFrameCommands(); }
    void LogNextFrame() { m_logNextFrame = true; }
    bool IsLogNextFrame() const { return m_logNextFrame; }
    void SubmitRenderFrame();

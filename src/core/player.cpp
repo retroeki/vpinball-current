@@ -2036,6 +2036,17 @@ void Player::GameLoop()
    assert(!(m_renderer->m_stereo3D == STEREO_VR && (m_videoSyncMode != VideoSyncMode::VSM_NONE || m_maxFramerate < 1000.f)));
 
    #ifdef ENABLE_BGFX
+      // The constructor's Renderer::RenderFrame() ("Prerendering static parts") built a full frame
+      // that is never submitted: the flush post below finds m_framePending false, so the render
+      // thread skips it and its content merges into the first game-loop frame. Its begin-of-frame
+      // commands are Ball::Render position late-updates capturing Ball* by pointer; if a ball is
+      // destroyed before the first frame (e.g. a trough fill ball draining on the first physics
+      // step), FinishFrame frees it before the render thread executes the stale lambda ->
+      // SIGSEGV on a null RenderDevice* (si_addr 0x1e8). Drop them here, still under m_frameMutex
+      // so the render thread cannot be executing. End-of-frame commands are kept on purpose: the
+      // reflection probe prerender defers 'delete accumulationSurface' and must still run.
+      m_renderer->m_renderDevice->ClearBeginOfFrameCmds();
+
       // Flush any pending frame
       m_renderer->m_renderDevice->m_frameReadySem.post();
 
