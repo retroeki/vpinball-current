@@ -1545,12 +1545,16 @@ void Shader::Load()
       loadProgram(embeddedShaders, SHADER_TECHNIQUE_bg_decal_without_texture, STEREO(vs_basic_notex_noclip),         STEREO(fs_decal_notex_noclip));
       loadProgram(embeddedShaders, SHADER_TECHNIQUE_bg_decal_with_texture,    STEREO(vs_basic_tex_noclip),           STEREO(fs_decal_tex_noclip));
       loadProgram(embeddedShaders, SHADER_TECHNIQUE_kickerBoolean,            STEREO(vs_kicker_noclip),              STEREO(fs_basic_notex_noat_noclip));
-      // Unshaded (additive/unlit) techniques: non-stereo builds use the lean vertex shader (position + texcoord only, see
-      // vs_unshaded.sc) with a fragment shader declaring just those inputs; stereo keeps the vs_basic pairing.
-      loadProgram(embeddedShaders, SHADER_TECHNIQUE_unshaded_without_texture, m_isStereo ? vs_basic_notex_noclip_st.name : "vs_unshaded_noclip", m_isStereo ? fs_unshaded_notex_noclip_st.name : "fs_unshaded_lean_notex_noclip");
-      loadProgram(embeddedShaders, SHADER_TECHNIQUE_unshaded_with_texture,    m_isStereo ? vs_basic_tex_noclip_st.name : "vs_unshaded_noclip",   m_isStereo ? fs_unshaded_tex_noclip_st.name : "fs_unshaded_lean_tex_noclip");
-      loadProgram(embeddedShaders, SHADER_TECHNIQUE_unshaded_without_texture_shadow, m_isStereo ? vs_basic_notex_noclip_st.name : "vs_unshaded_noclip", m_isStereo ? fs_unshaded_notex_ballshadow_noclip_st.name : "fs_unshaded_lean_notex_ballshadow_noclip");
-      loadProgram(embeddedShaders, SHADER_TECHNIQUE_unshaded_with_texture_shadow, m_isStereo ? vs_basic_tex_noclip_st.name : "vs_unshaded_noclip",    m_isStereo ? fs_unshaded_tex_ballshadow_noclip_st.name : "fs_unshaded_lean_tex_ballshadow_noclip");
+      // Unshaded (additive/unlit) techniques share vs_basic with the lit techniques ON PURPOSE: lightmap overlays are coplanar
+      // with the bake meshes they sit on and pass a LESSEQUAL depth test only if both draws produce bit-identical depth. Neither
+      // GLSL nor SPIR-V guarantees that across two different vertex shaders (no Invariant decoration through the bgfx HLSL
+      // front-end), and Mali compiles the same mul(matWorldViewProj, pos) differently in vs_unshaded vs vs_basic -> horizontal
+      // z-fight stripes over the whole playfield (2026-09-08, Fish Tales VPW). The lean vs_unshaded / fs_unshaded_lean pair
+      // stays compiled and embedded but unused (measured 0-1 ms, noise floor).
+      loadProgram(embeddedShaders, SHADER_TECHNIQUE_unshaded_without_texture, STEREO(vs_basic_notex_noclip),         STEREO(fs_unshaded_notex_noclip));
+      loadProgram(embeddedShaders, SHADER_TECHNIQUE_unshaded_with_texture,    STEREO(vs_basic_tex_noclip),           STEREO(fs_unshaded_tex_noclip));
+      loadProgram(embeddedShaders, SHADER_TECHNIQUE_unshaded_without_texture_shadow, STEREO(vs_basic_notex_noclip),  STEREO(fs_unshaded_notex_ballshadow_noclip));
+      loadProgram(embeddedShaders, SHADER_TECHNIQUE_unshaded_with_texture_shadow, STEREO(vs_basic_tex_noclip),       STEREO(fs_unshaded_tex_ballshadow_noclip));
       // Variants with a clipping plane
       loadProgram(embeddedShaders, SHADER_TECHNIQUE_basic_with_texture,       STEREO(vs_basic_tex_clip),           STEREO(fs_basic_tex_noat_clip), true);
       loadProgram(embeddedShaders, SHADER_TECHNIQUE_basic_with_texture_at,    STEREO(vs_basic_tex_clip),           STEREO(fs_basic_tex_at_clip), true);
@@ -1561,10 +1565,10 @@ void Shader::Load()
       loadProgram(embeddedShaders, SHADER_TECHNIQUE_bg_decal_without_texture, STEREO(vs_basic_notex_clip),         STEREO(fs_decal_notex_clip), true);
       loadProgram(embeddedShaders, SHADER_TECHNIQUE_bg_decal_with_texture,    STEREO(vs_basic_tex_clip),           STEREO(fs_decal_tex_clip), true);
       loadProgram(embeddedShaders, SHADER_TECHNIQUE_kickerBoolean,            STEREO(vs_kicker_clip),              STEREO(fs_basic_notex_noat_clip), true);
-      loadProgram(embeddedShaders, SHADER_TECHNIQUE_unshaded_without_texture, m_isStereo ? vs_basic_notex_clip_st.name : "vs_unshaded_clip", m_isStereo ? fs_unshaded_notex_clip_st.name : "fs_unshaded_lean_notex_clip", true);
-      loadProgram(embeddedShaders, SHADER_TECHNIQUE_unshaded_with_texture,    m_isStereo ? vs_basic_tex_clip_st.name : "vs_unshaded_clip",   m_isStereo ? fs_unshaded_tex_clip_st.name : "fs_unshaded_lean_tex_clip", true);
-      loadProgram(embeddedShaders, SHADER_TECHNIQUE_unshaded_without_texture_shadow, m_isStereo ? vs_basic_notex_clip_st.name : "vs_unshaded_clip", m_isStereo ? fs_unshaded_notex_ballshadow_clip_st.name : "fs_unshaded_lean_notex_ballshadow_clip", true);
-      loadProgram(embeddedShaders, SHADER_TECHNIQUE_unshaded_with_texture_shadow, m_isStereo ? vs_basic_tex_clip_st.name : "vs_unshaded_clip",    m_isStereo ? fs_unshaded_tex_ballshadow_clip_st.name : "fs_unshaded_lean_tex_ballshadow_clip", true);
+      loadProgram(embeddedShaders, SHADER_TECHNIQUE_unshaded_without_texture, STEREO(vs_basic_notex_clip),         STEREO(fs_unshaded_notex_clip), true);
+      loadProgram(embeddedShaders, SHADER_TECHNIQUE_unshaded_with_texture,    STEREO(vs_basic_tex_clip),           STEREO(fs_unshaded_tex_clip), true);
+      loadProgram(embeddedShaders, SHADER_TECHNIQUE_unshaded_without_texture_shadow, STEREO(vs_basic_notex_clip),  STEREO(fs_unshaded_notex_ballshadow_clip), true);
+      loadProgram(embeddedShaders, SHADER_TECHNIQUE_unshaded_with_texture_shadow, STEREO(vs_basic_tex_clip),       STEREO(fs_unshaded_tex_ballshadow_clip), true);
       // VR masking
       if (m_isStereo)
          loadProgram(embeddedShaders, SHADER_TECHNIQUE_vr_mask, "vs_vr_mask", "fs_unshaded_notex_noclip");

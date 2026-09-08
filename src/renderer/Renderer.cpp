@@ -2980,31 +2980,12 @@ void Renderer::RenderFrame()
       RenderStaticPrepass(); // Update statically prerendered parts if needed
       m_renderDevice->SetRenderTarget("Render Scene"s, GetMSAABackBufferTexture());
       m_renderDevice->AddRenderTargetDependency(m_staticPrepassRT);
-      // Bring the prepass (colour + depth) into the scene target. On tile-based GPUs the blit costs a transfer pass (read source,
-      // write destination through memory) plus a reload of the destination at the start of the scene pass; instead clear the
-      // target (LOAD_OP_CLEAR: no memory read) and copy the prepass with a point-sampled fullscreen quad that writes colour and
-      // depth as the first command of the scene pass. Pixel-identical to the blit. Kept to the single-view, non-MSAA, same-size
-      // case; stereo/layered/MSAA targets keep the blit.
-      if (m_stereo3D == STEREO_OFF && GetMSAABackBufferTexture()->m_nLayers == 1 && !GetMSAABackBufferTexture()->IsMSAA()
-         && m_staticPrepassRT->GetWidth() == GetMSAABackBufferTexture()->GetWidth() && m_staticPrepassRT->GetHeight() == GetMSAABackBufferTexture()->GetHeight())
-      {
-         m_renderDevice->Clear(clearType::TARGET | clearType::ZBUFFER, 0x00000000);
-         m_renderDevice->ResetRenderState();
-         m_renderDevice->SetRenderState(RenderState::ALPHABLENDENABLE, RenderState::RS_FALSE);
-         m_renderDevice->SetRenderState(RenderState::CULLMODE, RenderState::CULL_NONE);
-         m_renderDevice->SetRenderState(RenderState::ZENABLE, RenderState::RS_TRUE);
-         m_renderDevice->SetRenderState(RenderState::ZFUNC, RenderState::Z_ALWAYS);
-         m_renderDevice->SetRenderState(RenderState::ZWRITEENABLE, RenderState::RS_TRUE);
-         m_renderDevice->m_FBShader->SetTexture(SHADER_tex_fb_filtered, m_staticPrepassRT->GetColorSampler(), SF_NONE, SA_CLAMP, SA_CLAMP);
-         m_renderDevice->m_FBShader->SetTexture(SHADER_tex_depth, m_staticPrepassRT->GetDepthSampler(), SF_NONE, SA_CLAMP, SA_CLAMP);
-         m_renderDevice->m_FBShader->SetVector(SHADER_w_h_height, (float)(1.0 / m_staticPrepassRT->GetWidth()), (float)(1.0 / m_staticPrepassRT->GetHeight()), 1.0f, 1.0f);
-         m_renderDevice->m_FBShader->SetTechnique(SHADER_TECHNIQUE_fb_copy_depth);
-         m_renderDevice->DrawFullscreenTexturedQuad(m_renderDevice->m_FBShader);
-         m_renderDevice->GetCurrentPass()->m_commands.back()->SetForceFirst(true);
-         m_renderDevice->ResetRenderState();
-      }
-      else
-         m_renderDevice->BlitRenderTarget(m_staticPrepassRT, GetMSAABackBufferTexture());
+      // Copy the prepass (colour + depth) into the scene target with a blit. A fullscreen quad rewriting the depth through
+      // gl_FragDepth (technique fb_copy_depth, 2026-09-07) produced horizontal z-fight stripes on Mali GPUs: the coplanar
+      // lightmap overlays failed the LESSEQUAL test on alternate rows against the rewritten depth (2026-09-08, Fish Tales VPW;
+      // stripes vanish as soon as the static prepass is disabled). The blit copies depth bit-exactly on every GPU and its
+      // measured cost difference on the reference phone was within noise, so the quad path is not used.
+      m_renderDevice->BlitRenderTarget(m_staticPrepassRT, GetMSAABackBufferTexture());
    }
 
    RenderDynamics();
