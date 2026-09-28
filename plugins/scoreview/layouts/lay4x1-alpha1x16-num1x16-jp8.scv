@@ -1,0 +1,39 @@
+# Default layout for Williams System 11B Police Force: 8 digit jackpot display (top right),
+# 1 x 16 alphanumeric row and 1 x 16 numeric row. Same 18.5 unit pitch / 24x32 glyph base
+# as lay4x1-alpha2x16. Only matches the 8/16/16 segment group set PinMAME reports for polic_*.
+
+Width: 301.5
+Height: 106
+Fit: Contain
+
+Visuals:
+	- SegDisplay:
+		Rect: [148,5,162,32]
+		Src: ctrl://default/seg?id=0
+		XPos: [0.00, 18.5, 37, 55.5, 74, 92.5, 111, 129.5]
+		Glass:
+			Roughness: 0.15
+			Image:     ./Glass-Dirty-1.webp
+			Area:      [473,32,517,100]
+			Ambient:   [0.4,0.4,0.4]
+		
+	- SegDisplay:
+		Rect: [0,37,310,32]
+		Src: ctrl://default/seg?id=1
+		XPos: [0.00, 18.5, 37, 55.5, 74, 92.5, 111, 129.5, 148, 166.5, 185, 203.5, 222, 240.5, 259, 277.5]
+		Glass:
+			Roughness: 0.15
+			Image:     ./Glass-Dirty-1.webp
+			Area:      [0,132,990,100]
+			Ambient:   [0.4,0.4,0.4]
+		
+	- SegDisplay:
+		Rect: [0,69,310,32]
+		Src: ctrl://default/seg?id=2
+		XPos: [0.00, 18.5, 37, 55.5, 74, 92.5, 111, 129.5, 148, 166.5, 185, 203.5, 222, 240.5, 259, 277.5]
+		Glass:
+			Roughness: 0.15
+			Image:     ./Glass-Dirty-1.webp
+			Area:      [0,232,990,100]
+			Ambient:   [0.4,0.4,0.4]
+

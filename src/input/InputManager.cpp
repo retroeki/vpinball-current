@@ -60,37 +60,110 @@ InputManager::InputManager()
       if (touchZonesForced)
          m_touchRegionMap.clear();
       const bool oneHandedFlippers = settings.GetStandalone_TouchOneHandedFlippers();
-      PLOGI << "Registering " << (oneHandedFlippers ? 17 : 13) << " touch zones (forced=" << touchZonesForced << " oneHandedFlippers=" << oneHandedFlippers << ")";
+      // Touch layout preset, chosen by the player on the host's Controls screen.
+      //   0 Standard      — as shipped originally.
+      //   1 Buttons Up Top / 2 Wide Flippers — exist because in the standard layout the
+      //     Start/Action/Launch Ball strip sits along the bottom edge, exactly where a thumb
+      //     resting low on the glass lands, so players kept firing Start and Launch Ball
+      //     mid-ball. Moving that strip up under the credit row leaves that area dead.
+      //   3 The Wallace Touch — keeps the bottom strip (start/action/plunge reads as one
+      //     intuitive row) but puts the three nudges in a row of the same height just above it,
+      //     and doubles the flippers' height so a thumb sliding up during frantic tapping stays
+      //     on the flipper.
+      // Any change here must be mirrored in the host's legend replica
+      // (VPinballTouchControlsView.kt), which draws these same rects.
+      const int layoutPreset = clamp(settings.GetStandalone_TouchLayoutPreset(), 0, 3);
+      // Flipper rects differ per preset and are reused by the one-handed registrations below.
+      RECT leftFlipperRect { 0, 60, 30, 90 };
+      RECT rightFlipperRect { 70, 60, 100, 90 };
+
+      // Top strip is identical in every preset, so the getting-started spotlight over the
+      // top-right corner (VPinballPlayerActivity) stays valid whichever preset is selected.
       addTouchRegion(RECT { 0, 0, 33, 10 }, GetAddCreditActionId(0));
       // Top-middle zone: EB Buyin (buy extra ball / front-door button, keyFront "2").
       addTouchRegion(RECT { 33, 0, 67, 10 }, GetExtraBallBuyInActionId());
       // Top-right zone opens the Android app settings dialog (fires VPINBALL_EVENT_MENU_PRESSED via InGameUI action).
       // Coin-door toggle is now available as an action inside the settings dialog itself.
       addTouchRegion(RECT { 67, 0, 100, 10 }, GetInGameUIActionId());
-      addTouchRegion(RECT { 0, 10, 50, 30 }, GetLeftMagnaActionId());
-      addTouchRegion(RECT { 50, 10, 100, 30 }, GetRightMagnaActionId());
-      addTouchRegion(RECT { 0, 30, 50, 60 }, GetLeftNudgeActionId());
-      addTouchRegion(RECT { 50, 30, 100, 60 }, GetRightNudgeActionId());
-      addTouchRegion(RECT { 0, 60, 30, 90 }, GetLeftFlipperActionId());
-      addTouchRegion(RECT { 0, 60, 30, 90 }, GetStagedLeftFlipperActionId());
-      addTouchRegion(RECT { 30, 60, 70, 90 }, GetCenterNudgeActionId());
-      addTouchRegion(RECT { 70, 60, 100, 90 }, GetRightFlipperActionId());
-      addTouchRegion(RECT { 70, 60, 100, 90 }, GetStagedRightFlipperActionId());
+
+      if (layoutPreset == 0)
+      {
+         // Standard: action row along the bottom edge, flippers 30% wide either side of the centre nudge.
+         addTouchRegion(RECT { 0, 10, 50, 30 }, GetLeftMagnaActionId());
+         addTouchRegion(RECT { 50, 10, 100, 30 }, GetRightMagnaActionId());
+         addTouchRegion(RECT { 0, 30, 50, 60 }, GetLeftNudgeActionId());
+         addTouchRegion(RECT { 50, 30, 100, 60 }, GetRightNudgeActionId());
+         addTouchRegion(RECT { 30, 60, 70, 90 }, GetCenterNudgeActionId());
+         addTouchRegion(RECT { 0, 90, 30, 100 }, GetStartActionId());
+         // Centre-bottom action/lockbar button (engine action "Lockbar", script LockbarKey), sits between Start and Launch.
+         addTouchRegion(RECT { 30, 90, 70, 100 }, GetLockbarActionId());
+         addTouchRegion(RECT { 70, 90, 100, 100 }, GetLaunchBallActionId());
+      }
+      else if (layoutPreset == 3)
+      {
+         // The Wallace Touch: bottom action strip unchanged, three equal nudge zones in a row
+         // directly above it (deliberately no taller than the action row), and flippers at double
+         // the standard height. With the centre nudge moved down into that row there is nothing
+         // left between the flippers, so they meet in the middle and take half the width each.
+         // Magna gives up half its row to make space for the taller flippers.
+         addTouchRegion(RECT { 0, 10, 50, 20 }, GetLeftMagnaActionId());
+         addTouchRegion(RECT { 50, 10, 100, 20 }, GetRightMagnaActionId());
+         addTouchRegion(RECT { 0, 80, 33, 90 }, GetLeftNudgeActionId());
+         addTouchRegion(RECT { 33, 80, 67, 90 }, GetCenterNudgeActionId());
+         addTouchRegion(RECT { 67, 80, 100, 90 }, GetRightNudgeActionId());
+         addTouchRegion(RECT { 0, 90, 30, 100 }, GetStartActionId());
+         addTouchRegion(RECT { 30, 90, 70, 100 }, GetLockbarActionId());
+         addTouchRegion(RECT { 70, 90, 100, 100 }, GetLaunchBallActionId());
+         leftFlipperRect = RECT { 0, 20, 50, 80 };
+         rightFlipperRect = RECT { 50, 20, 100, 80 };
+      }
+      else
+      {
+         // Presets 1 and 2: action row moves to 10-20%, in thirds so it lines up with the credit
+         // row above it. Magna takes 20-40%, nudge 40-60%, and the flippers run to the bottom edge.
+         addTouchRegion(RECT { 0, 10, 33, 20 }, GetStartActionId());
+         addTouchRegion(RECT { 33, 10, 67, 20 }, GetLockbarActionId());
+         addTouchRegion(RECT { 67, 10, 100, 20 }, GetLaunchBallActionId());
+         addTouchRegion(RECT { 0, 20, 50, 40 }, GetLeftMagnaActionId());
+         addTouchRegion(RECT { 50, 20, 100, 40 }, GetRightMagnaActionId());
+         if (layoutPreset == 1)
+         {
+            addTouchRegion(RECT { 0, 40, 50, 60 }, GetLeftNudgeActionId());
+            addTouchRegion(RECT { 50, 40, 100, 60 }, GetRightNudgeActionId());
+            addTouchRegion(RECT { 30, 60, 70, 100 }, GetCenterNudgeActionId());
+            leftFlipperRect = RECT { 0, 60, 30, 100 };
+            rightFlipperRect = RECT { 70, 60, 100, 100 };
+         }
+         else
+         {
+            // Preset 2: centre nudge joins the nudge row, so the flippers split the bottom 40% in half.
+            addTouchRegion(RECT { 0, 40, 33, 60 }, GetLeftNudgeActionId());
+            addTouchRegion(RECT { 33, 40, 67, 60 }, GetCenterNudgeActionId());
+            addTouchRegion(RECT { 67, 40, 100, 60 }, GetRightNudgeActionId());
+            leftFlipperRect = RECT { 0, 60, 50, 100 };
+            rightFlipperRect = RECT { 50, 60, 100, 100 };
+         }
+      }
+
+      // Flippers are registered last so the rects above are already preset-resolved. Registration
+      // order carries no meaning: PushTouchEvent activates every region a touch point falls within.
+      addTouchRegion(leftFlipperRect, GetLeftFlipperActionId());
+      addTouchRegion(leftFlipperRect, GetStagedLeftFlipperActionId());
+      addTouchRegion(rightFlipperRect, GetRightFlipperActionId());
+      addTouchRegion(rightFlipperRect, GetStagedRightFlipperActionId());
       if (oneHandedFlippers)
       {
          // One-handed accessibility: each flipper zone also fires the opposite
          // flipper (and its staged variant). Each extra registration gets its
          // own direct-state slot and the action ORs all slots, so overlapping
          // holds across both zones press/release cleanly.
-         addTouchRegion(RECT { 0, 60, 30, 90 }, GetRightFlipperActionId());
-         addTouchRegion(RECT { 0, 60, 30, 90 }, GetStagedRightFlipperActionId());
-         addTouchRegion(RECT { 70, 60, 100, 90 }, GetLeftFlipperActionId());
-         addTouchRegion(RECT { 70, 60, 100, 90 }, GetStagedLeftFlipperActionId());
+         addTouchRegion(leftFlipperRect, GetRightFlipperActionId());
+         addTouchRegion(leftFlipperRect, GetStagedRightFlipperActionId());
+         addTouchRegion(rightFlipperRect, GetLeftFlipperActionId());
+         addTouchRegion(rightFlipperRect, GetStagedLeftFlipperActionId());
       }
-      addTouchRegion(RECT { 0, 90, 30, 100 }, GetStartActionId());
-      // Centre-bottom action/lockbar button (engine action "Lockbar", script LockbarKey), sits between Start and Launch.
-      addTouchRegion(RECT { 30, 90, 70, 100 }, GetLockbarActionId());
-      addTouchRegion(RECT { 70, 90, 100, 100 }, GetLaunchBallActionId());
+      PLOGI << "Registered " << m_touchRegionMap.size() << " touch zones (forced=" << touchZonesForced << " preset=" << layoutPreset
+            << " oneHandedFlippers=" << oneHandedFlippers << ')';
    }
    m_touchRegionHold.assign(m_touchRegionMap.size(), 0);
 
