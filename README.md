@@ -1,6 +1,19 @@
-# Visual Pinball (Android Fork)
+# Visual Pinball — PocketPinball Release Source
 
-Fork of [vpinball/vpinball](https://github.com/vpinball/vpinball) (v10.8.1) with Android platform modifications. All credit for the core engine goes to Randy Davis and the [Visual Pinball development team](https://github.com/vpinball).
+This repository holds the complete source code for the Visual Pinball engine used in the current
+release of **PocketPinball**. It is published to meet the source-availability requirements of the
+GNU General Public License v3 (or later), the licence Visual Pinball is released under.
+
+It is a fork of [vpinball/vpinball](https://github.com/vpinball/vpinball) (v10.8.1) with changes
+for Android. All credit for the core engine goes to Randy Davis and the
+[Visual Pinball development team](https://github.com/vpinball).
+
+## Repository status
+
+This is a standalone copy of the code behind the shipping PocketPinball build. It lives outside
+the original fork, [retroeki/vpinball](https://github.com/retroeki/vpinball), because of problems
+with that repository's git history. The plan is to fix those problems and merge this code back
+into retroeki/vpinball, after which development will continue there.
 
 ## What this fork adds
 
