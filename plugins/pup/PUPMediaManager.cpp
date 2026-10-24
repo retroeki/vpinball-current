@@ -123,7 +123,18 @@ void PUPMediaManager::SetVolume(float volume)
 
 void PUPMediaManager::Stop()
 {
+   // A stop returns the screen to its background loop, like PinUP (and upstream's newer
+   // PUPMediaManager::Stop): Harry Potter's Game_Init stops the backglass, which left it black.
+   if (m_pMainPlayer->isBackground)
+      return;
    m_pMainPlayer->player.Stop();
+   if (m_pBackgroundPlayer != nullptr)
+   {
+      std::swap(m_pBackgroundPlayer, m_pMainPlayer);
+      m_pBackgroundPlayer->player.SetName(GetPlayerName(m_pScreen, false));
+      m_pMainPlayer->player.SetName(GetPlayerName(m_pScreen, true));
+      m_pMainPlayer->player.Pause(false);
+   }
 }
 
 void PUPMediaManager::Stop(int priority)

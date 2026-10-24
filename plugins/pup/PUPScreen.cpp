@@ -506,6 +506,10 @@ void PUPScreen::Render(VPXRenderContext2D* const ctx, bool skipBackground) {
       for (auto pScreen : m_backChildren)
          pScreen->Render(ctx);
 
+      // PuPOverlays/PuPAlphas images are part of the screen's content (Harry Potter's
+      // backglass score box), so they stay; only the PuPFrames background is skipped.
+      m_overlay.Render(ctx, m_rect);
+
       for (PUPLabel* pLabel : m_labels)
          pLabel->Render(ctx, m_rect, m_pagenum);
 
