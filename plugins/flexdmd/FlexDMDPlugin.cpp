@@ -5,6 +5,9 @@
 
 #include <functional>
 #include <cassert>
+#include <mutex>
+#include <thread>
+#include <unordered_map>
 
 #include "common.h"
 
@@ -322,6 +325,24 @@ static uint32_t endpointId, nextDmdId;
 
 static std::vector<FlexDMD*> flexDmds;
 
+// The table script edits a FlexDMD scene on the game thread while other threads pull its
+// frames (DMDUtil's update thread, for an external DMD). Drawing the scene on such a thread
+// raced the script: bitmaps released mid-draw corrupted memory (JP's Foo Fighters crashed in
+// the GL driver) and two threads clearing one surface made the ScoreView flicker (JP's
+// framework swaps 40 character bitmaps per update). So scenes are drawn on the game thread
+// only, on each prepared frame, and other threads get a copy of the last frame.
+// flexDmdsMutex guards the list (changed on the game thread, read by source queries from
+// any thread) and the published copies.
+static std::mutex flexDmdsMutex;
+static std::thread::id gameThread;
+struct PublishedFrame
+{
+   unsigned int frameId = 0;
+   std::vector<uint8_t> data;
+};
+static std::unordered_map<uint32_t, PublishedFrame> publishedFrames;
+static unsigned int onPrepareFrameId;
+
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 // Alphanumeric segment displays
@@ -444,6 +465,7 @@ static void onGetSegSrc(const unsigned int eventId, void* userData, void* msgDat
    //       LPI_LOGI("  FlexDMD id=%u Show=%d RenderMode=%d", pFlex->GetId(), pFlex->GetShow(), pFlex->GetRenderMode());
    //    }
    // }
+   std::lock_guard<std::mutex> lock(flexDmdsMutex);
    for (const FlexDMD* pFlex : flexDmds)
    {
       if (pFlex->GetShow())
@@ -592,21 +614,62 @@ static void onGetSegSrc(const unsigned int eventId, void* userData, void* msgDat
 static bool hasDMD = false;
 static unsigned int getDmdSrcId, onDmdSrcChangeId;
 
-static DisplayFrame GetRenderFrame(const CtlResId id)
+// Game thread only: draws the scene and publishes a copy of the frame for other threads
+static DisplayFrame RenderFrame(FlexDMD* pFlex)
 {
-   for (FlexDMD* pFlex : flexDmds)
+   pFlex->Render();
+   DisplayFrame frame { 0, nullptr };
+   size_t size = 0;
+   if (pFlex->GetRenderMode() == RenderMode_DMD_RGB)
    {
-      if ((endpointId == id.endpointId) && (pFlex->GetId() == id.resId))
+      frame = { pFlex->GetFrameId(), pFlex->UpdateRGBFrame() };
+      size = static_cast<size_t>(pFlex->GetWidth()) * pFlex->GetHeight() * 3;
+   }
+   else if ((pFlex->GetRenderMode() == RenderMode_DMD_GRAY_2) || (pFlex->GetRenderMode() == RenderMode_DMD_GRAY_4))
+   {
+      frame = { pFlex->GetFrameId(), pFlex->UpdateLumFloatFrame() };
+      size = static_cast<size_t>(pFlex->GetWidth()) * pFlex->GetHeight() * sizeof(float);
+   }
+   if (frame.frame != nullptr)
+   {
+      std::lock_guard<std::mutex> lock(flexDmdsMutex);
+      PublishedFrame& published = publishedFrames[pFlex->GetId()];
+      if (published.frameId != frame.frameId || published.data.size() != size)
       {
-         pFlex->Render();
-         if (pFlex->GetRenderMode() == RenderMode_DMD_RGB)
-            return { pFlex->GetFrameId(), pFlex->UpdateRGBFrame() };
-         else if ((pFlex->GetRenderMode() == RenderMode_DMD_GRAY_2) || (pFlex->GetRenderMode() == RenderMode_DMD_GRAY_4))
-            return { pFlex->GetFrameId(), pFlex->UpdateLumFloatFrame() };
-         return { 0, nullptr };
+         published.frameId = frame.frameId;
+         published.data.assign(static_cast<const uint8_t*>(frame.frame), static_cast<const uint8_t*>(frame.frame) + size);
       }
    }
-   return { 0, nullptr };
+   return frame;
+}
+
+static DisplayFrame GetRenderFrame(const CtlResId id)
+{
+   if (endpointId != id.endpointId)
+      return { 0, nullptr };
+   if (std::this_thread::get_id() == gameThread)
+   {
+      for (FlexDMD* pFlex : flexDmds) // only changed on this thread
+         if (pFlex->GetId() == id.resId)
+            return RenderFrame(pFlex);
+      return { 0, nullptr };
+   }
+   // Another thread: the last frame drawn on the game thread, copied for this caller
+   thread_local std::vector<uint8_t> copy;
+   std::lock_guard<std::mutex> lock(flexDmdsMutex);
+   const auto published = publishedFrames.find(id.resId);
+   if (published == publishedFrames.end() || published->second.data.empty())
+      return { 0, nullptr };
+   copy = published->second.data;
+   return { published->second.frameId, copy.data() };
+}
+
+static void OnPrepareFrame(const unsigned int eventId, void* userData, void* msgData)
+{
+   gameThread = std::this_thread::get_id();
+   for (FlexDMD* pFlex : flexDmds)
+      if (pFlex->GetRun() && pFlex->GetShow())
+         RenderFrame(pFlex);
 }
 
 static void onGetRenderDMDSrc(const unsigned int eventId, void* userData, void* msgData)
@@ -619,6 +682,7 @@ static void onGetRenderDMDSrc(const unsigned int eventId, void* userData, void* 
    //    logCount++;
    //    LPI_LOGI("onGetRenderDMDSrc: queried, %zu FlexDMD instances", flexDmds.size());
    // }
+   std::lock_guard<std::mutex> lock(flexDmdsMutex);
    for (const FlexDMD* pFlex : flexDmds)
    {
       // if (doLog)
@@ -691,7 +755,11 @@ static void OnShowChanged(FlexDMD* pFlexI)
 static void OnFlexDestroyed(FlexDMD* pFlex)
 {
    bool showChanged = pFlex->GetShow();
-   std::erase(flexDmds, pFlex);
+   {
+      std::lock_guard<std::mutex> lock(flexDmdsMutex);
+      std::erase(flexDmds, pFlex);
+      publishedFrames.erase(pFlex->GetId());
+   }
    if (showChanged)
       OnShowChanged(pFlex);
 }
@@ -716,6 +784,9 @@ MSGPI_EXPORT void MSGPIAPI FlexDMDPluginLoad(const uint32_t sessionId, const Msg
    getDmdSrcId = msgApi->GetMsgID(CTLPI_NAMESPACE, CTLPI_DISPLAY_GET_SRC_MSG);
    onSegSrcChangedId = msgApi->GetMsgID(CTLPI_NAMESPACE, CTLPI_SEG_ON_SRC_CHG_MSG);
    getSegSrcId = msgApi->GetMsgID(CTLPI_NAMESPACE, CTLPI_SEG_GET_SRC_MSG);
+   // Scenes are drawn on the game thread, once per frame (see flexDmdsMutex)
+   onPrepareFrameId = msgApi->GetMsgID(VPXPI_NAMESPACE, VPXPI_EVT_ON_PREPARE_FRAME);
+   msgApi->SubscribeMsg(endpointId, onPrepareFrameId, OnPrepareFrame, nullptr);
 
    unsigned int getVpxApiId = msgApi->GetMsgID(VPXPI_NAMESPACE, VPXPI_MSG_GET_API);
    msgApi->BroadcastMsg(endpointId, getVpxApiId, &vpxApi);
@@ -777,7 +848,11 @@ MSGPI_EXPORT void MSGPIAPI FlexDMDPluginLoad(const uint32_t sessionId, const Msg
       LPI_LOGI("FlexDMD::CreateObject: created instance id=%d, show=%d, run=%d, renderMode=%d, %dx%d",
          nextDmdId, pFlex->GetShow(), pFlex->GetRun(), (int)pFlex->GetRenderMode(), pFlex->GetWidth(), pFlex->GetHeight());
       nextDmdId++;
-      flexDmds.push_back(pFlex);
+      gameThread = std::this_thread::get_id(); // scripts create and edit FlexDMD on the game thread
+      {
+         std::lock_guard<std::mutex> lock(flexDmdsMutex);
+         flexDmds.push_back(pFlex);
+      }
       return static_cast<void*>(pFlex);
    };
    UltraDMD_SCD->CreateObject = []()
@@ -798,6 +873,8 @@ MSGPI_EXPORT void MSGPIAPI FlexDMDPluginUnload()
    assert(!hasDMD);
    assert(!hasAlpha);
 
+   msgApi->UnsubscribeMsg(onPrepareFrameId, OnPrepareFrame);
+   msgApi->ReleaseMsgID(onPrepareFrameId);
    msgApi->ReleaseMsgID(onSegSrcChangedId);
    msgApi->ReleaseMsgID(getSegSrcId);
    msgApi->ReleaseMsgID(onDmdSrcChangeId);
