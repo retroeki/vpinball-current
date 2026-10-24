@@ -1175,12 +1175,29 @@ typedef struct {
    DIR *dir;
    WCHAR search_path[MAX_PATH];
    char pattern[MAX_PATH];
+   char dir_path[MAX_PATH];
 } find_handle;
 
-static void fill_find_data(const char *filename, WIN32_FIND_DATAW *data)
+// VPX: report directories as directories and files with their size. Every entry
+// used to be FILE_ATTRIBUTE_NORMAL, so a folder's Files collection tried to open
+// its subfolders as files (E_FAIL: Iron Maiden Virtual Time's
+// `For Each f In fso.GetFolder(path).Files`) and SubFolders was always empty.
+static void fill_find_data(const char *dir_path, const char *filename, WIN32_FIND_DATAW *data)
 {
    memset(data, 0, sizeof(*data));
    data->dwFileAttributes = FILE_ATTRIBUTE_NORMAL;
+
+   char full[MAX_PATH * 2];
+   snprintf(full, sizeof(full), "%s/%s", dir_path, filename);
+   struct stat st;
+   if (!stat(full, &st)) {
+      if (S_ISDIR(st.st_mode))
+         data->dwFileAttributes = FILE_ATTRIBUTE_DIRECTORY;
+      else {
+         data->nFileSizeLow = (DWORD)((unsigned long long)st.st_size & 0xFFFFFFFFull);
+         data->nFileSizeHigh = (DWORD)((unsigned long long)st.st_size >> 32);
+      }
+   }
 
    int wlen = MultiByteToWideChar(CP_UTF8, 0, filename, -1, data->cFileName, MAX_PATH);
    if (wlen <= 0 || wlen > MAX_PATH)
@@ -1236,13 +1253,14 @@ HANDLE WINAPI FindFirstFileW(LPCWSTR lpFileName, LPWIN32_FIND_DATAW lpFindFileDa
    handle->dir = dir;
    wcsncpy(handle->search_path, lpFileName, MAX_PATH);
    lstrcpynA(handle->pattern, pattern, MAX_PATH);
+   lstrcpynA(handle->dir_path, path, MAX_PATH);
 
    struct dirent *entry;
    while ((entry = readdir(dir)) != NULL) {
       if (entry->d_name[0] == '.') continue;
       if (fnmatch(handle->pattern, entry->d_name, 0) != 0) continue;
 
-      fill_find_data(entry->d_name, lpFindFileData);
+      fill_find_data(handle->dir_path, entry->d_name, lpFindFileData);
       return (HANDLE)handle;
    }
 
@@ -1262,7 +1280,7 @@ BOOL WINAPI FindNextFileW(HANDLE hFindFile, LPWIN32_FIND_DATAW lpFindFileData)
       if (entry->d_name[0] == '.') continue;
       if (fnmatch(handle->pattern, entry->d_name, 0) != 0) continue;
 
-      fill_find_data(entry->d_name, lpFindFileData);
+      fill_find_data(handle->dir_path, entry->d_name, lpFindFileData);
       return TRUE;
    }
 
@@ -1413,14 +1431,11 @@ HRESULT WINAPI PathAllocCombine(const WCHAR *path1, const WCHAR *path2, DWORD fl
 
 BOOL WINAPI ReadFile(HANDLE hFile, LPVOID lpBuffer, DWORD nNumberOfBytesToRead, LPDWORD lpNumberOfBytesRead, LPOVERLAPPED lpOverlapped)
 {
-   char* pBuffer = (char*)lpBuffer;
-   *lpNumberOfBytesRead = 0;
-   while (*lpNumberOfBytesRead < nNumberOfBytesToRead)
-   {
-      if(feof(hFile)) break;
-      *pBuffer++ = fgetc(hFile);
-      (*lpNumberOfBytesRead)++;
-   }
+   // VPX: fread stops at the end of the file. The old fgetc loop tested feof before
+   // reading, so the read that hit the end stored fgetc's EOF as a 0xFF byte: every
+   // FSO text read ended in an extra character and an empty file was never
+   // AtEndOfStream (Loony Labyrinth's high score loader read past the end, 62).
+   *lpNumberOfBytesRead = (DWORD)fread(lpBuffer, 1, nNumberOfBytesToRead, (FILE*)hFile);
    return TRUE;
 }
 

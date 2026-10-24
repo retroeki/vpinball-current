@@ -4315,22 +4315,32 @@ static HRESULT Global_FormatDateTime(BuiltinDisp *This, VARIANT *args, unsigned 
     hres = to_system_time(lcid, args, &st);
     if(FAILED(hres)) return hres;
 
+    /* VPX: the standalone build has no NLS locale data, so GetDateFormatW and
+     * GetTimeFormatW always fail and every named format but vbGeneralDate raised
+     * E_FAIL (The Price Is Right: FormatDateTime(Now(), vbLongTime)). Fall back to
+     * the US formats that vbGeneralDate already produces (M/d/yyyy H:mm:ss). */
     switch(format) {
     case 1: /* vbLongDate */
-        if(!GetDateFormatW(lcid, DATE_LONGDATE, &st, NULL, buff, ARRAY_SIZE(buff)))
-            return E_FAIL;
+        if(!GetDateFormatW(lcid, DATE_LONGDATE, &st, NULL, buff, ARRAY_SIZE(buff))) {
+            static const WCHAR *days[] = { L"Sunday", L"Monday", L"Tuesday", L"Wednesday", L"Thursday", L"Friday", L"Saturday" };
+            static const WCHAR *months[] = { L"January", L"February", L"March", L"April", L"May", L"June", L"July",
+                L"August", L"September", L"October", L"November", L"December" };
+            if(st.wDayOfWeek > 6 || st.wMonth < 1 || st.wMonth > 12)
+                return E_FAIL;
+            swprintf(buff, ARRAY_SIZE(buff), L"%ls, %ls %u, %u", days[st.wDayOfWeek], months[st.wMonth - 1], st.wDay, st.wYear);
+        }
         break;
     case 2: /* vbShortDate */
         if(!GetDateFormatW(lcid, DATE_SHORTDATE, &st, NULL, buff, ARRAY_SIZE(buff)))
-            return E_FAIL;
+            swprintf(buff, ARRAY_SIZE(buff), L"%u/%u/%u", st.wMonth, st.wDay, st.wYear);
         break;
     case 3: /* vbLongTime */
         if(!GetTimeFormatW(lcid, 0, &st, NULL, buff, ARRAY_SIZE(buff)))
-            return E_FAIL;
+            swprintf(buff, ARRAY_SIZE(buff), L"%u:%02u:%02u", st.wHour, st.wMinute, st.wSecond);
         break;
     case 4: /* vbShortTime */
         if(!GetTimeFormatW(lcid, TIME_NOSECONDS|TIME_FORCE24HOURFORMAT, &st, NULL, buff, ARRAY_SIZE(buff)))
-            return E_FAIL;
+            swprintf(buff, ARRAY_SIZE(buff), L"%02u:%02u", st.wHour, st.wMinute);
         break;
     default:
         return E_INVALIDARG;

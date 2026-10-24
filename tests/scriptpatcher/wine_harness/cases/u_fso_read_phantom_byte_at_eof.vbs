@@ -1,6 +1,6 @@
 ' EXPECT: run-ok
 ' WINDOWS: ok
-' KNOWN-BUG: U standalone ReadFile (wine.c) returns one phantom 0xFF byte at end of file
+' FIXED (crash-fixes-2026-10-23): U standalone ReadFile (wine.c) returns one phantom 0xFF byte at end of file
 ' Every FSO text read on device: "abc" reads back as "abc" & ChrW(&HFFFD), and an
 ' empty file is never AtEndOfStream (Loony Labyrinth's high score loader then
 ' skips writing its defaults and reads past the end: error 62).

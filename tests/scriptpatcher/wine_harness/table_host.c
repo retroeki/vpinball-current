@@ -727,6 +727,11 @@ static const StubMember kShellAppMembers[] = {
    { L"SetTime", R_EMPTY }, { L"Application", R_EMPTY }, { L"Parent", R_EMPTY },
 };
 
+// src/core/ScriptPupDmdControl.cpp
+static const StubMember kPupDmdMembers[] = {
+   { L"DMDOpen", R_EMPTY }, { L"DMDClose", R_EMPTY }, { L"DMDPuPMirror", R_EMPTY }, { L"DMDPuPTextMirror", R_EMPTY },
+};
+
 typedef struct {
    IDispatch IDispatch_iface;
    LONG ref;
@@ -846,6 +851,8 @@ IUnknown* table_host_create_object(const WCHAR* progid)
       return stub_new(kWshMembers, sizeof(kWshMembers) / sizeof(kWshMembers[0]));
    if (!wcscasecmp(progid, L"Shell.Application"))
       return stub_new(kShellAppMembers, sizeof(kShellAppMembers) / sizeof(kShellAppMembers[0]));
+   if (!wcscasecmp(progid, L"PUPDMDControl.DMD"))
+      return stub_new(kPupDmdMembers, sizeof(kPupDmdMembers) / sizeof(kPupDmdMembers[0]));
    if (!wcscmp(progid, L"System.Collections.ArrayList")) // def.cpp matches this one case-sensitively
       return (IUnknown*)&any_new(0)->IDispatch_iface;
    if (g_faithful) {

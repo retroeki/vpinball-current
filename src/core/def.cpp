@@ -10,6 +10,7 @@
 #include "standalone/PoleStorage.h"
 #include "core/ScriptArrayList.h"
 #include "core/ScriptShellApplication.h"
+#include "core/ScriptPupDmdControl.h"
 #include "core/ScriptWScriptShell.h"
 #endif
 
@@ -926,6 +927,15 @@ HRESULT external_create_object(const WCHAR* progid, IClassFactory* cf, IUnknown*
       IDispatch* shell = CreateScriptShellApplication();
       if (!shell) return E_OUTOFMEMORY;
       if (ppObj) *ppObj = (IUnknown*)shell;
+      return S_OK;
+   }
+
+   // PUPDMDControl.DMD — the PinUP Player hardware-DMD driver, created only when a
+   // table is set up for a real DMD. No-op stub (see ScriptPupDmdControl.h).
+   if (wcsicmp(progid, L"PUPDMDControl.DMD") == 0) {
+      IDispatch* dmd = CreateScriptPupDmdControl();
+      if (!dmd) return E_OUTOFMEMORY;
+      if (ppObj) *ppObj = (IUnknown*)dmd;
       return S_OK;
    }
 

@@ -2698,6 +2698,19 @@ bool PinTable::LoadToken(const int id, BiffReader * const pbr)
    case FID(CODE): // if the script is protected then we pass in the proper cryptokey into the code loadstream
    {
       m_pcv->LoadFromStream(pbr->m_pistream, pbr->m_hcrypthash, m_script_protected ? pbr->m_hcryptkey : NULL);
+#ifdef __STANDALONE__
+      // A password-protected VP8/VP9 table stores its script encrypted (the same test as
+      // the hkey choice in LoadGameFromFilename). Decrypting it needs Windows CryptoAPI,
+      // so the compiler got ciphertext and failed at line 1 with 1032 (12days-christmas,
+      // 8 reports). Run a script that says why instead; the error screen shows its text.
+      if (m_script_protected && pbr->m_version < NO_ENCRYPTION_FORMAT_VERSION)
+      {
+         PLOGE << "Table script is encrypted (VP8/VP9 password protection), which this platform cannot decrypt";
+         m_pcv->m_script_text = "Err.Raise vbObjectError + 1, \"Visual Pinball\", "
+            "\"This table's script is password protected (an old VP8/VP9 table protection) and cannot be decrypted on this device. "
+            "Use a version of the table saved without protection.\"\r\n";
+      }
+#endif
       break;
    }
    case FID(CCUS): pbr->GetStruct(m_rgcolorcustom, sizeof(COLORREF) * 16); break;
