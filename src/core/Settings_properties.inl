@@ -1384,6 +1384,11 @@ PropIntUnbounded(Standalone, ReplayExportStartMs, "Replay Export Start"s, "Expor
 PropIntUnbounded(Standalone, ReplayExportLenMs, "Replay Export Length"s, "Export window length in ms (0 = to the end of the recording)"s, 0);
 PropIntUnbounded(Standalone, ReplayExportFps, "Replay Export FPS"s, "Fixed frame step rate for replay export mode"s, 60);
 PropString(Standalone, ReplayHookText, "Replay Hook Text"s, "Overlay text shown centered for the first two seconds of replay playback"s, ""s);
+PropBool(Standalone, TournamentLock, "Tournament Lock"s, "Tournament game: one game only, no buy-ins, no operator or difficulty changes. Set by the host for tournament games only."s, false);
+PropString(Standalone, ReplayMetaAttemptId, "Replay Meta Attempt"s, "Tournament attempt id written into the v5 replay header. Set by the host."s, ""s);
+PropString(Standalone, ReplayMetaTableSha1, "Replay Meta Table SHA-1"s, "Table file SHA-1 written into the v5 replay header. Set by the host."s, ""s);
+PropString(Standalone, ReplayMetaAppVersion, "Replay Meta App Version"s, "Host app version written into the v5 replay header. Set by the host."s, ""s);
+PropString(Standalone, ReplayMetaEngineVersion, "Replay Meta Engine Version"s, "Engine version written into the v5 replay header. Set by the host."s, ""s);
 PropIntUnbounded(Standalone, ReplayLogoMode, "Replay Logo Mode"s, "Replay playback branding: 0 = none, 1 = corner pixel R + wordmark, 2 = end card outro (final 1.2 s)"s, 1);
 PropString(Standalone, VPRegPath, "VPRegPath"s, ""s, ""s);
 

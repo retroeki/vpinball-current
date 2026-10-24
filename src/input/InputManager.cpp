@@ -5,6 +5,7 @@
 #include "renderer/VRDevice.h"
 
 #include "ScanCodes.h"
+#include "core/TournamentLock.h"
 
 #ifdef __LIBVPINBALL__
    #include "lib/src/VPinballLib.h"
@@ -629,7 +630,7 @@ void InputManager::PushButtonEvent(uint16_t deviceId, uint16_t buttonId, uint64_
    if (deviceId == m_keyboardDeviceId && !g_pplayer->m_liveUI->IsInGameUIOpened())
    {
       const unsigned char dik = GetDirectInputKeyFromSDLScancode(static_cast<SDL_Scancode>(buttonId));
-      if (dik != 0)
+      if (dik != 0 && TournamentAllowsRawKey(buttonId, dik, isPressed))
       {
          CComVariant rgvar[1] = { CComVariant(dik) };
          DISPPARAMS dispparams = { rgvar, nullptr, 1, 0 };
@@ -726,10 +727,12 @@ void InputManager::PushTouchEvent(SDL_FingerID fingerId, float relativeX, float 
    // the DInput "1" scancode on the touch-start edges. TOUCH-ONLY: controller/keyboard "1"
    // already reaches the script via the raw-keyboard DIK path (PushButtonEvent), so doing
    // this in the Start action handler instead would double-fire and consume two credits.
-   auto fireEmStartDIK = [](bool isPressed) {
+   auto fireEmStartDIK = [this](bool isPressed) {
       if (!g_pvp->m_settings.GetStandalone_EmCreditDualSend() || g_pplayer->m_liveUI->IsInGameUIOpened())
          return;
       const unsigned char dik = GetDirectInputKeyFromSDLScancode(SDL_SCANCODE_1);
+      if (!TournamentAllowsRawKey(SDL_SCANCODE_1, dik, isPressed))
+         return;
       CComVariant rgvar[1] = { CComVariant(dik) };
       DISPPARAMS dispparams = { rgvar, nullptr, 1, 0 };
       g_pplayer->m_ptable->FireDispID(isPressed ? DISPID_GameEvents_KeyDown : DISPID_GameEvents_KeyUp, &dispparams);
@@ -1205,6 +1208,78 @@ void InputManager::Unregister(ButtonMapping* mapping)
    const uint32_t deviceAndButtonId = mapping->GetDeviceId() << 16 | mapping->GetAxisOrButtonId();
    if (auto it = m_buttonMappings.find(deviceAndButtonId); it != m_buttonMappings.end())
       std::erase(it->second, mapping);
+}
+
+void InputManager::SetTournamentLock(bool locked)
+{
+   using namespace TournamentLock;
+   m_tournamentLock = locked;
+   m_tournamentBlocked.store(0, std::memory_order_relaxed);
+   m_tournamentStarts.store(0, std::memory_order_relaxed);
+   m_tournamentCredits.store(0, std::memory_order_relaxed);
+   m_rawSuppressed.reset();
+   m_lockRole.assign(m_inputActions.size(), static_cast<uint8_t>(Role::Other));
+   const auto set = [this](unsigned int id, Role role)
+   {
+      if (id < m_lockRole.size())
+         m_lockRole[id] = static_cast<uint8_t>(role);
+   };
+   set(m_startActionId, Role::Start);
+   for (int i = 0; i < 4; i++)
+      set(m_addCreditActionId[i], Role::Credit);
+   set(m_extraBallBuyInActionId, Role::BuyIn);
+   set(m_extraBallActionId, Role::ExtraBall);
+   set(m_resetActionId, Role::Reset);
+   set(m_coinDoorActionId, Role::CoinDoor);
+   for (int i = 0; i < 8; i++)
+      set(m_serviceActionId[i], Role::Service);
+   set(m_slamTiltActionId, Role::SlamTilt);
+   set(m_exitGameActionId, Role::Exit);
+   set(m_exitInteractiveActionId, Role::Exit);
+   PLOGI << "TournamentLock " << (locked ? "on" : "off");
+}
+
+bool InputManager::TournamentAllows(unsigned int actionId)
+{
+   using namespace TournamentLock;
+   if (!m_tournamentLock || actionId >= m_lockRole.size())
+      return true;
+   const Role role = static_cast<Role>(m_lockRole[actionId]);
+   if (Allows(role))
+   {
+      // Counted here, on the action press, only: the raw-key paths (the script
+      // KeyDown in PushButtonEvent, the EM touch "1") forward the same press again.
+      if (Counted(role))
+         (role == Role::Start ? m_tournamentStarts : m_tournamentCredits).fetch_add(1, std::memory_order_relaxed);
+      return true;
+   }
+   m_tournamentBlocked.fetch_add(1, std::memory_order_relaxed);
+   return false;
+}
+
+bool InputManager::TournamentAllowsRawKey(uint16_t buttonId, unsigned char dik, bool isPressed)
+{
+   if (!m_tournamentLock)
+      return true;
+   if (!isPressed)
+   {
+      // The release of a blocked press is swallowed too.
+      const bool wasSuppressed = m_rawSuppressed.test(dik);
+      m_rawSuppressed.reset(dik);
+      return !wasSuppressed;
+   }
+   using namespace TournamentLock;
+   // "2" is the buy-in / front-door key (VPMKeys keyFront), bound to no action.
+   // A key bound to several actions is blocked if any of them is.
+   bool allowed = buttonId != SDL_SCANCODE_2 || Allows(Role::BuyIn);
+   for (const auto& action : m_inputActions)
+      if (action->GetActionId() < m_lockRole.size() && action->IsMappedTo(m_keyboardDeviceId, buttonId))
+         allowed = allowed && Allows(static_cast<Role>(m_lockRole[action->GetActionId()]));
+   if (allowed)
+      return true;
+   m_rawSuppressed.set(dik);
+   m_tournamentBlocked.fetch_add(1, std::memory_order_relaxed);
+   return false;
 }
 
 void InputManager::OnInputActionStateChanged(InputAction* action)

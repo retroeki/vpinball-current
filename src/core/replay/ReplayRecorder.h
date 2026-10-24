@@ -76,7 +76,11 @@ public:
    // disable-lighting + position, flasher alpha/color, light color/intensity,
    // material opacity/color, bumper ring and slingshot frames. Slot numbers
    // shifted, so v3 files are rejected (re-record), same as every prior bump.
-   static constexpr uint16_t FORMAT_VERSION = 4;
+   // v5 (2026-10, Pocket Pinball tournaments part 4, 3.7): a u16-length block of
+   // UTF-8 key=value lines follows the 20-byte header (attemptId, tableSha1,
+   // appVersion, engineVersion, startEpochMs, playfield). Chunks start after it.
+   // Readers accept 4 and 5.
+   static constexpr uint16_t FORMAT_VERSION = 5;
    // Marathon-session safety valve: stop appending past this (~4.3 h at ~65 KB/s);
    // the recording stays valid, just truncated.
    static constexpr uint64_t MAX_SESSION_BYTES = 1ull << 30;

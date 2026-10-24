@@ -173,6 +173,13 @@ VPINBALLAPI int VPinballGetNVRAM(uint8_t* buffer, int maxBytes, int* isNvramTabl
 // setting. Returns 1 with the values filled, 0 when no table is running.
 VPINBALLAPI int VPinballGetPlayStats(uint32_t* wallMs, uint32_t* activeMs, uint32_t* ballsPlayed);
 
+// Tournament games (Pocket Pinball tournaments, part 4, 3.7): whether the input
+// lock is on, whether a ball has moved (information only, the lock does not use
+// it), how many inputs the lock blocked, and how many Start and credit presses
+// it delivered (more than one Start sends the game to review). Returns 1 with
+// the values filled, 0 when no table is running.
+VPINBALLAPI int VPinballGetTournamentState(int* locked, int* underway, uint32_t* blockedCount, uint32_t* startPresses, uint32_t* creditPresses);
+
 // First-run NVRAM generation (PinMAME ROM tables). Boots the ROM HEADLESSLY via
 // libpinmame (no player / renderer / SDL surface / B2S) to create <rom>.nv when
 // it is missing, so the first real launch is immediately playable instead of

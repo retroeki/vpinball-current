@@ -6,6 +6,8 @@
 
 #include "InputAction.h"
 #include "PhysicsSensor.h"
+#include <atomic>
+#include <bitset>
 
 
 class InputManager final
@@ -48,6 +50,16 @@ public:
    unsigned int GetServiceActionId(int idx) const { assert(0 <= idx && idx < 8); return m_serviceActionId[idx]; }
    bool IsPressed(int actionId) const;
    int GetWindowVirtualKeyForAction(unsigned int actionId) const;
+
+   // Tournament games (Pocket Pinball tournaments, part 4, 3.7): no buy-ins, no
+   // operator changes, no reset. TournamentAllows decides an action press; Start
+   // and credit presses are delivered and counted (more than one Start = review).
+   void SetTournamentLock(bool locked);
+   bool IsTournamentLocked() const { return m_tournamentLock; }
+   uint32_t GetTournamentBlockedCount() const { return m_tournamentBlocked.load(std::memory_order_relaxed); }
+   uint32_t GetTournamentStartCount() const { return m_tournamentStarts.load(std::memory_order_relaxed); }
+   uint32_t GetTournamentCreditCount() const { return m_tournamentCredits.load(std::memory_order_relaxed); }
+   bool TournamentAllows(unsigned int actionId);
 
    struct ActionState
    {
@@ -230,6 +242,13 @@ private:
    ankerl::unordered_dense::map<uint32_t, vector<ButtonMapping*>> m_buttonMappings;
    vector<InputAction*> m_onUpdateActions;
    ActionState m_inputActionstate {};
+   bool TournamentAllowsRawKey(uint16_t buttonId, unsigned char dik, bool isPressed);
+   bool m_tournamentLock = false;
+   vector<uint8_t> m_lockRole; // TournamentLock::Role per action id
+   std::atomic<uint32_t> m_tournamentBlocked { 0 };
+   std::atomic<uint32_t> m_tournamentStarts { 0 };  // Start presses delivered
+   std::atomic<uint32_t> m_tournamentCredits { 0 }; // Credit1-4 presses delivered
+   std::bitset<256> m_rawSuppressed; // raw DIKs whose press was blocked
    const unsigned int m_onActionEventMsgId;
 
    std::unique_ptr<PhysicsSensor> m_plungerPositionSensor;

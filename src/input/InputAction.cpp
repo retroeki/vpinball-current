@@ -217,6 +217,17 @@ void InputAction::OnInputChanged(ButtonMapping*)
 
    if (m_isPressed != wasPressed)
    {
+      // TournamentLock (Pocket Pinball tournaments, part 4, 3.7): decided on the
+      // press; the release of a blocked press is swallowed too, so plugins, the
+      // action state and the script never see half a key.
+      if (m_isPressed)
+         m_lockSuppressed = !m_eventManager->TournamentAllows(m_actionId);
+      if (m_lockSuppressed)
+      {
+         if (!m_isPressed)
+            m_lockSuppressed = false;
+         return;
+      }
       m_eventManager->OnInputActionStateChanged(this);
       m_lastOnChangeMs = msec();
       m_onStateChange(*this, wasPressed, m_isPressed);
@@ -238,6 +249,15 @@ void InputAction::OnUpdate()
          m_onStateChange(*this, m_isPressed, m_isPressed);
       }
    }
+}
+
+bool InputAction::IsMappedTo(uint16_t deviceId, uint16_t buttonId) const
+{
+   for (const auto& mappings : m_inputMappings)
+      for (const auto& mapping : mappings)
+         if (mapping.GetDeviceId() == deviceId && mapping.GetAxisOrButtonId() == buttonId)
+            return true;
+   return false;
 }
 
 void InputAction::SetRepeatPeriod(int delayMs)

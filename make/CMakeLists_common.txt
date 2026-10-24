@@ -61,6 +61,8 @@ set(VPX_SOURCES
    src/core/ReelDmd.h
    src/core/ReelClassifier.cpp
    src/core/ReelClassifier.h
+   src/core/TournamentLock.cpp
+   src/core/TournamentLock.h
    src/core/PropertyDef.h
    src/core/PropertyRegistry.h
    src/core/PropertyStore.h

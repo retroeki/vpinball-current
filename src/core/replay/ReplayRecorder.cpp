@@ -13,6 +13,25 @@
 #include <cstring>
 #include <cfloat>
 #include <cmath>
+#include <chrono>
+#include <sstream>
+
+// The v5 metadata block (tournaments part 4, 3.7; part 5, 5.4). The ReplayMeta*
+// values are empty on a normal session; the host sets them for tournament games.
+static string BuildReplayMeta(Player *player)
+{
+   Settings &s = player->m_ptable->m_settings;
+   const PinTable *const t = player->m_ptable;
+   const long long epochMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+   std::ostringstream out;
+   out << "attemptId=" << s.GetStandalone_ReplayMetaAttemptId() << '\n'
+       << "tableSha1=" << s.GetStandalone_ReplayMetaTableSha1() << '\n'
+       << "appVersion=" << s.GetStandalone_ReplayMetaAppVersion() << '\n'
+       << "engineVersion=" << s.GetStandalone_ReplayMetaEngineVersion() << '\n'
+       << "startEpochMs=" << epochMs << '\n'
+       << "playfield=" << t->m_left << ',' << t->m_top << ',' << t->m_right << ',' << t->m_bottom << '\n';
+   return out.str();
+}
 
 ReplayRecorder::ReplayRecorder(Player *player, const string &finalPath)
    : m_player(player)
@@ -49,6 +68,10 @@ ReplayRecorder::ReplayRecorder(Player *player, const string &finalPath)
       m_file.write(reinterpret_cast<const char *>(&zero), 4); // firstMs, patched at finalize
       m_file.write(reinterpret_cast<const char *>(&zero), 4); // lastMs
       m_file.write(reinterpret_cast<const char *>(&zero), 4); // chunkCount
+      const string meta = BuildReplayMeta(player);
+      const uint16_t metaLen = static_cast<uint16_t>(std::min<size_t>(meta.size(), 0xFFFF));
+      m_file.write(reinterpret_cast<const char *>(&metaLen), 2);
+      m_file.write(meta.data(), metaLen);
       m_fileOk = !m_file.fail();
    }
    if (m_fileOk)

@@ -512,6 +512,22 @@ VPINBALLAPI int VPinballGetPlayStats(uint32_t* wallMs, uint32_t* activeMs, uint3
    return 1;
 }
 
+VPINBALLAPI int VPinballGetTournamentState(int* locked, int* underway, uint32_t* blockedCount, uint32_t* startPresses, uint32_t* creditPresses)
+{
+   if (locked) *locked = 0;
+   if (underway) *underway = 0;
+   if (blockedCount) *blockedCount = 0;
+   if (startPresses) *startPresses = 0;
+   if (creditPresses) *creditPresses = 0;
+   if (!g_pplayer) return 0;
+   if (locked) *locked = g_pplayer->m_pininput.IsTournamentLocked() ? 1 : 0;
+   if (underway) *underway = g_pplayer->m_playStats.GetActiveMs() > 0 ? 1 : 0;
+   if (blockedCount) *blockedCount = g_pplayer->m_pininput.GetTournamentBlockedCount();
+   if (startPresses) *startPresses = g_pplayer->m_pininput.GetTournamentStartCount();
+   if (creditPresses) *creditPresses = g_pplayer->m_pininput.GetTournamentCreditCount();
+   return 1;
+}
+
 // ---------------------------------------------------------------------------
 // Headless first-run NVRAM generation
 //
@@ -560,6 +576,9 @@ typedef int  (*pm_run_t)(const char*);   // returns PINMAME_STATUS; OK == 0
 typedef void (*pm_stop_t)();
 typedef int  (*pm_isrunning_t)();
 typedef int  (*pm_changednvram_t)(PmNvramState*);
+typedef uint64_t (*pm_hwgen_t)();        // returns PINMAME_HARDWARE_GEN (enum : uint64_t); 0 when not running
+
+constexpr uint64_t PM_GEN_WPC_ANY = 0xFF; // PINMAME_HARDWARE_GEN_WPCALPHA_1 .. PINMAME_HARDWARE_GEN_WPC95
 
 // Forward libpinmame's internal logs to logcat during headless generation
 // (otherwise a ROM-load failure / stall is invisible). Matches
@@ -632,6 +651,7 @@ VPINBALLAPI int VPinballGenerateNVRAM(const char* romName, const char* pinmamePa
    auto Stop         = (pm_stop_t)        dlsym(lib, "PinmameStop");
    auto IsRunning    = (pm_isrunning_t)   dlsym(lib, "PinmameIsRunning");
    auto ChangedNVRAM = (pm_changednvram_t)dlsym(lib, "PinmameGetChangedNVRAM");
+   auto HardwareGen  = (pm_hwgen_t)       dlsym(lib, "PinmameGetHardwareGen");  // optional: WPC stop rule
    if (!SetConfig || !Run || !Stop) {
       PLOGE.printf("VPinballGenerateNVRAM: missing libpinmame symbols");
       dlclose(lib);
@@ -688,6 +708,30 @@ VPINBALLAPI int VPinballGenerateNVRAM(const char* romName, const char* pinmamePa
    // set well above any runtime spike). A quiet-settle path still covers small/quiet
    // ROMs that have no big burst, a no-NVRAM probe bails ROMs with no handler, and
    // maxSeconds is a final runaway backstop. Per-second counts are logged for tuning.
+   //
+   // WPC (Williams/Bally 1990-99) replaces those timing rules: every WPC ROM keeps
+   // its settings, audits and high scores at 0x1800-0x1FFF of the .nv (WPC RAM),
+   // and this only runs with no .nv on disk, where PinMAME starts that RAM at 0xFF
+   // (wpc.c NVRAM_HANDLER). So the factory setup shows as that block filling: stop
+   // once it holds wpcSettingsMin set bytes (not 0x00/0xFF) and has had no write
+   // for wpcQuietMs. The timing rules stop too early on WPC-95: Cirqus Voltaire
+   // (cv_20hc) clears RAM at 0.5 s (the "burst"), self-tests to 8.5 s and writes
+   // its settings at 8.75-9.5 s, so a stop at 8.5 s saved a blank file and the
+   // real boot looped on FACTORY SETTINGS RESTORED. Checked on 44 WPC ROMs, all
+   // generations from WPCALPHA_2 to WPC95 (tools/nvram-testbed in the app repo).
+   // If the block has not filled by wpcFallbackMs (an untested ROM), the timing
+   // rules take over.
+   constexpr int wpcSettingsLo = 0x1800;
+   constexpr int wpcSettingsHi = 0x2000;
+   const int wpcSettingsMin = 128;      // blank file: 2 set bytes (PinMAME's clock); set-up file: 337+
+   const int wpcQuietMs = 1000;
+   const int wpcFallbackMs = 30000;
+   uint8_t wpcSettings[wpcSettingsHi - wpcSettingsLo];
+   memset(wpcSettings, 0xFF, sizeof(wpcSettings));
+   uint64_t hwGen = 0;                  // read once the game is fully started
+   int wpcSet = 0;                      // bytes of the settings block that are set
+   int wpcLastWriteMs = -1;
+   bool wpcSettled = false;
    PmNvramState* buf = ChangedNVRAM
       ? (PmNvramState*)malloc(sizeof(PmNvramState) * (size_t)PM_CORE_MAXNVRAM)
       : nullptr;
@@ -726,6 +770,20 @@ VPINBALLAPI int VPinballGenerateNVRAM(const char* romName, const char* pinmamePa
       const bool started = !IsRunning || IsRunning() == 1;
       if (started && buf && ChangedNVRAM)
          changed = ChangedNVRAM(buf);
+      // PinmameGetHardwareGen reads core_gameData, so only once fully started.
+      if (hwGen == 0 && HardwareGen && IsRunning && IsRunning() == 1)
+         hwGen = HardwareGen();
+      for (int i = 0; i < changed; ++i) {
+         const int no = buf[i].nvramNo;   // offset into the .nv image
+         if (no < wpcSettingsLo || no >= wpcSettingsHi)
+            continue;
+         uint8_t& v = wpcSettings[no - wpcSettingsLo];
+         const bool was = v != 0x00 && v != 0xFF;
+         v = buf[i].currStat;
+         const bool now = v != 0x00 && v != 0xFF;
+         wpcSet += (int)now - (int)was;
+         wpcLastWriteMs = elapsedMs;
+      }
       lastChanged = changed;
       if (changed >= 0) {
          sawNvram = true;
@@ -736,15 +794,22 @@ VPINBALLAPI int VPinballGenerateNVRAM(const char* romName, const char* pinmamePa
       logAccumMs += pollMs;
       if (logAccumMs >= 1000) {
          logAccumMs = 0;
-         PLOGI.printf("VPinballGenerateNVRAM: t=%ds changed=%d peak=%d lastBurstMs=%d settledMs=%d",
-                      elapsedMs / 1000, lastChanged, peak, lastBurstMs, settledMs);
+         PLOGI.printf("VPinballGenerateNVRAM: t=%ds changed=%d peak=%d lastBurstMs=%d settledMs=%d wpcSet=%d",
+                      elapsedMs / 1000, lastChanged, peak, lastBurstMs, settledMs, wpcSet);
       }
       // No NVRAM ever appeared -> ROM has no nvram_handler; don't wait out the cap.
       if (!sawNvram && elapsedMs >= noNvramProbeMs) {
          noNvram = true;
          break;
       }
-      if (elapsedMs >= minRunMs) {
+      if ((hwGen & PM_GEN_WPC_ANY) != 0 && elapsedMs < wpcFallbackMs) {
+         // WPC: the settings block is written and has gone quiet.
+         if (wpcSet >= wpcSettingsMin && (elapsedMs - wpcLastWriteMs) >= wpcQuietMs) {
+            wpcSettled = true;
+            break;
+         }
+      }
+      else if (elapsedMs >= minRunMs) {
          // Primary: saw the big init burst and a grace has passed since the last one.
          if (lastBurstMs >= 0 && (elapsedMs - lastBurstMs) >= postBurstGraceMs)
             break;
@@ -756,8 +821,9 @@ VPINBALLAPI int VPinballGenerateNVRAM(const char* romName, const char* pinmamePa
    if (buf)
       free(buf);
 
-   PLOGI.printf("VPinballGenerateNVRAM: stopping after %dms (sawNvram=%d noNvram=%d romFatal=%d peak=%d lastBurstMs=%d) rom=%s",
-                elapsedMs, (int)sawNvram, (int)noNvram, (int)g_romLoadFatal, peak, lastBurstMs, romName);
+   PLOGI.printf("VPinballGenerateNVRAM: stopping after %dms (sawNvram=%d noNvram=%d romFatal=%d peak=%d lastBurstMs=%d hwGen=0x%llx wpcSet=%d wpcSettled=%d) rom=%s",
+                elapsedMs, (int)sawNvram, (int)noNvram, (int)g_romLoadFatal, peak, lastBurstMs,
+                (unsigned long long)hwGen, wpcSet, (int)wpcSettled, romName);
    Stop();                                // joins emulation thread -> flushes <rom>.nv
    dlclose(lib);
    // 3 = ROM_INCOMPLETE: required ROM files are missing/corrupt (PinMAME could

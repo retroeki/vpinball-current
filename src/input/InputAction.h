@@ -37,6 +37,7 @@ public:
 
    void SetActionId(unsigned int id) { m_actionId = id; }
    unsigned int GetActionId() const { return m_actionId; }
+   bool IsMappedTo(uint16_t deviceId, uint16_t buttonId) const;
 
    void OnUpdate();
    void SetRepeatPeriod(int delayMs);
@@ -59,6 +60,7 @@ private:
    vector<vector<ButtonMapping>> m_inputMappings;
    vector<bool> m_directStates;
    bool m_isPressed = false;
+   bool m_lockSuppressed = false; // TournamentLock blocked this press, so its release is swallowed too
    unsigned int m_lastOnChangeMs = 0;
    int m_repeatPeriodMs = -1;
    unsigned int m_actionId = 0xFFFFFFFF;

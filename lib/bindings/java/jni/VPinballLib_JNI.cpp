@@ -627,6 +627,19 @@ JNIEXPORT jlongArray JNICALL Java_org_vpinball_app_jni_VPinballJNI_VPinballGetPl
    return result;
 }
 
+// Tournament games: [ballMoved (0/1), blockedCount, locked (0/1), startPresses, creditPresses].
+// Null when no table is running.
+JNIEXPORT jlongArray JNICALL Java_org_vpinball_app_jni_VPinballJNI_VPinballGetTournamentState(JNIEnv* env, jobject obj)
+{
+   int locked = 0, underway = 0;
+   uint32_t blocked = 0, starts = 0, credits = 0;
+   if (!VPinballGetTournamentState(&locked, &underway, &blocked, &starts, &credits)) return nullptr;
+   const jlong values[5] = { (jlong)underway, (jlong)blocked, (jlong)locked, (jlong)starts, (jlong)credits };
+   jlongArray result = env->NewLongArray(5);
+   env->SetLongArrayRegion(result, 0, 5, values);
+   return result;
+}
+
 JNIEXPORT jint JNICALL Java_org_vpinball_app_jni_VPinballJNI_VPinballResetTable(JNIEnv* env, jobject obj)
 {
    return VPinballResetTable();

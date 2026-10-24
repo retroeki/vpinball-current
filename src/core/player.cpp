@@ -746,6 +746,13 @@ Player::Player(PinTable *const table, const int playMode)
       pf_reflection_probe->SetReflectionPlane(plane);
    }
 
+   // Tournament games (Pocket Pinball tournaments, part 4, 3.7): the input lock,
+   // and the table's authored difficulty instead of a per-table override.
+   const bool tournamentLock = !IsEditorMode() && m_ptable->m_settings.GetStandalone_TournamentLock();
+   m_pininput.SetTournamentLock(tournamentLock);
+   if (tournamentLock)
+      m_ptable->m_globalDifficulty = m_ptable->m_difficulty;
+
    PLOGI << "Initializing physics"; // For profiling
    m_progressDialog.SetProgress("Initializing Physics..."s, 30);
    // Need to set timecur here, for init functions that set timers

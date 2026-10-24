@@ -93,7 +93,7 @@ bool ReplayData::Load(const std::string &path)
    const uint8_t *p = file.data() + 4;
    uint16_t version;
    memcpy(&version, p, 2);
-   if (version != ReplayRecorder::FORMAT_VERSION)
+   if (version != 4 && version != ReplayRecorder::FORMAT_VERSION)
    {
       PLOGW << "ReplayData: unsupported format version " << version;
       return false;
@@ -104,6 +104,17 @@ bool ReplayData::Load(const std::string &path)
    const uint32_t chunkCount = GetU32(p);
 
    const uint8_t *const end = file.data() + file.size();
+   if (version >= 5)
+   { // v5 metadata block (u16 length + key=value lines), read by the app only
+      if (p + 2 > end)
+         return false;
+      uint16_t metaLen;
+      memcpy(&metaLen, p, 2);
+      p += 2;
+      if (p + metaLen > end)
+         return false;
+      p += metaLen;
+   }
    for (uint32_t i = 0; i < chunkCount; i++)
    {
       if (p + 8 > end)
