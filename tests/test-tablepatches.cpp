@@ -136,6 +136,12 @@ int main() {
       CHECK(ApplyTableSpecificPatches(dd, "DarkestDungeon_3.06.vpx")
                == "       If PuPlayer.getroot = \"\" Then Exit Sub\r\n       set pFolder = fso.GetFolder(PuPlayer.getroot)\r\n",
             "Darkest Dungeon: PinUP version check skipped when there is no PuP folder");
+      const std::string dmdWant = "Dim DMDType: DMDType = 2 ' Android: the pack's default FullDMD layout\r\n";
+      CHECK(ApplyTableSpecificPatches("Dim DMDType: DMDType = \"1\" ' Default for Android (was ObjFile.ReadLine)\r\n",
+                                      "DarkestDungeon_3.06.vpx") == dmdWant,
+            "Darkest Dungeon: DMDType 2 over the patcher's default 1");
+      CHECK(ApplyTableSpecificPatches("Dim DMDType: DMDType = ObjFile.ReadLine\r\n", "DarkestDungeon_3.06.vpx") == dmdWant,
+            "Darkest Dungeon: DMDType 2 over the raw ScreenType.txt read");
    }
    printf("%s (%d failures)\n", g_fail ? "FAILURES" : "ALL PASS", g_fail);
    return g_fail ? 1 : 0;

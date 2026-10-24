@@ -130,6 +130,16 @@ const TablePatch kTablePatches[] = {
    { "DarkestDungeon_3.06.vpx", "set pFolder = fso.GetFolder(PuPlayer.getroot)",
      "If PuPlayer.getroot = \"\" Then Exit Sub\r\n       set pFolder = fso.GetFolder(PuPlayer.getroot)", false,
      "Darkest Dungeon: skip the PinUP exe version check when the PuP pack is not installed" },
+   // Darkest Dungeon 3.06: DMDType normally comes from the pack's ScreenType.txt, written
+   // by the layout .bat the user runs on Windows (the zip ships "99"). The patcher's
+   // generic PatchPinUpPlayerFileAccess default "1" sends the score labels to pDMD = 1,
+   // screen 1 "DMD", which the pack's screens.pup sets to off, so no score is shown.
+   // The pack's default screens.pup is the "3 Screen - FullDMD" layout, whose .bat writes
+   // 2: pDMD = 13 "DMD Info", drawn over screen 5 FullDMD, the screen ScoreView shows.
+   { "DarkestDungeon_3.06.vpx",
+     "(Dim DMDType: DMDType =) (?:ObjFile\\.ReadLine|\"1\" ' Default for Android \\(was ObjFile\\.ReadLine\\))",
+     "$1 2 ' Android: the pack's default FullDMD layout", true,
+     "Darkest Dungeon: DMDType 2, the PuP pack's default FullDMD layout (score on screen 13)" },
 };
 const size_t kTablePatchCount = sizeof(kTablePatches) / sizeof(kTablePatches[0]);
 
