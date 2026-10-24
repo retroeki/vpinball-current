@@ -21,6 +21,10 @@ endif()
 # Repo root: tests/scriptpatcher/corpus_harness -> ../../..
 get_filename_component(VPX_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../.." ABSOLUTE)
 
+# The src tree holding ui/simplescriptpatcher.cpp. patcher_diff.sh points it at a copy of
+# another git revision to build a baseline patcher.
+set(PATCHER_SRC "${VPX_ROOT}/src" CACHE PATH "src tree of the patcher under test")
+
 find_package(Threads REQUIRED)
 
 # Vendored Abseil (required by RE2) + RE2, EXCLUDE_FROM_ALL so only the targets
@@ -34,8 +38,8 @@ add_subdirectory("${VPX_ROOT}/re2" "${CMAKE_BINARY_DIR}/re2-build" EXCLUDE_FROM_
 
 add_executable(patch_corpus
    patch_corpus.cpp
-   "${VPX_ROOT}/src/ui/simplescriptpatcher.cpp"   # the patcher under test
-   "${VPX_ROOT}/src/ui/tablepatches.cpp"          # per-table layer (std::regex, self-contained)
+   "${PATCHER_SRC}/ui/simplescriptpatcher.cpp"   # the patcher under test
+   "${PATCHER_SRC}/ui/tablepatches.cpp"          # per-table layer (std::regex, self-contained)
 )
 
 target_compile_definitions(patch_corpus PRIVATE __STANDALONE__)
@@ -44,7 +48,7 @@ target_compile_definitions(patch_corpus PRIVATE __STANDALONE__)
 # minimal shim instead of the heavy src/core/stdafx.h.
 target_include_directories(patch_corpus BEFORE PRIVATE
    "${CMAKE_CURRENT_SOURCE_DIR}"          # stdafx.h shim
-   "${VPX_ROOT}/src"                      # ui/simplescriptpatcher.h, ui/tablepatches.h
+   "${PATCHER_SRC}"                      # ui/simplescriptpatcher.h, ui/tablepatches.h
    "${VPX_ROOT}/re2"                      # <re2/re2.h>
    "${VPX_ROOT}/third-party/include"      # <plog/Log.h>
 )

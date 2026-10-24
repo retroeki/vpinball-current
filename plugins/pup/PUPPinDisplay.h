@@ -73,6 +73,9 @@ public:
    void playevent(int ScreenNum, const string& playlist, const string& playfilename, int volume, int priority, int playtype, int Seconds, const string& Special);
    void SetPosVideo(int ScreenNum, int StartPos, int EndPos, int Mode, const string& Special);
    void PuPClose();
+   // Not part of PinUP: what the table's `ObjFile.ReadLine` of ScreenType.txt should give
+   // (PUPScreenType.h). SimpleScriptPatcher::PatchPinUpPlayerFileAccess calls it.
+   string ReadScreenType(const string& path) const;
 
 private:
    PUPManager& m_pupManager;

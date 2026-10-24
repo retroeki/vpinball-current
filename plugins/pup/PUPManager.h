@@ -3,6 +3,7 @@
 #pragma once
 
 #include "common.h"
+#include "PUPScoreTracker.h"
 
 #include "plugins/ControllerPlugin.h"
 
@@ -97,12 +98,15 @@ public:
 
    void QueueTriggerData(PUPTriggerData data);
 
+   // A table's PuPlayer.LabelSet: moves the ScoreView to the screen with the score (PUPScoreTracker.h).
+   void OnLabelSet(const PUPScreen* pScreen, const string& szLabel, const string& szCaption, bool visible);
+
 private:
    void ProcessQueue();
    void UnloadFonts();
    void LoadFonts();
    void LoadPlaylists();
-   void DetermineScoreViewScreen(const string& szRomName);
+   void DetermineScoreViewScreen();
    void Start();
    void Stop();
 
@@ -119,6 +123,7 @@ private:
    std::thread m_thread;
    vector<PUPPlaylist*> m_playlists;
    int m_scoreViewScreenNum = -1;
+   ScoreTracker m_scoreTracker;
 
    const MsgPluginAPI* const m_msgApi;
    const uint32_t m_endpointId;

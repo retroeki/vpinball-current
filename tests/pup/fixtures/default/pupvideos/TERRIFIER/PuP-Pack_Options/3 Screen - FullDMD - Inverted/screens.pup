@@ -1,0 +1,8 @@
+ScreenNum,ScreenDes,PlayList,PlayFile,Loopit,Active,Priority,CustomPos
+2,Backglass,,,0,ForcePopBack,,"5,0,0,100,100"
+12,MiniGame,,,0,ForcePop,,"5,0,0,100,100"
+4,Music,,,0,MusicOnly,,
+5,FullDMD,,,0,ForcePopBack,,"2,0,0,100,100"
+17,"Slot Reel 1",,,0,ForcePop,,"2,28.6,41.25,12.0,21.3"
+18,"Slot Reel 2",,,0,ForcePop,,"2,42.55,41.25,12.0,21.3"
+19,"Slot Reel 3",,,0,ForcePop,,"2,56.65,41.25,12.0,21.3"

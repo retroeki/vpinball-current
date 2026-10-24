@@ -1,0 +1,6 @@
+ScreenNum,ScreenDes,PlayList,PlayFile,Loopit,Active,Priority,CustomPos
+1,Topper,,,0,ForceOn,,
+2,Backglass,,,0,ForceBack,,
+4,Music,,,0,MusicOnly,,
+5,FullDMD,,,0,ForceBack,,"2,0,0,100,100"
+11,"Splash Alpha",,,0,ForcePop,,"5,0,0,100,100,6"

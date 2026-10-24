@@ -169,26 +169,16 @@ void PUPManager::LoadConfig(const string& szRomName)
    }
 
    // Determine which screen to use for scoreview
-   DetermineScoreViewScreen(szRomName);
+   DetermineScoreViewScreen();
 
    // Queue initial event
    LOGI("Queueing initial D0 trigger");
    QueueTriggerData({ 'D', 0, 1 });
 }
 
-void PUPManager::DetermineScoreViewScreen(const string& szRomName)
+void PUPManager::DetermineScoreViewScreen()
 {
-   // Packs that draw the score on the backglass while screen 1 only plays its own video.
-   // hpgof (Harry Potter Goblet of Fire): every score label is on screen 2, inside the
-   // PuPOverlays frame; the table never switches its PuPDMD to the score page.
-   static const string kBackglassScorePacks[] = { "hpgof"s };
-   auto backglass = GetScreen(PUP_SCREEN_BACKGLASS);
-   if (backglass && std::ranges::any_of(kBackglassScorePacks, [&szRomName](const string& pack) { return StrCompareNoCase(szRomName, pack); })) {
-      m_scoreViewScreenNum = PUP_SCREEN_BACKGLASS;
-      LOGI("ScoreView screen: %d (%s) - score drawn on the backglass by this pack", m_scoreViewScreenNum, backglass->GetScreenDes().c_str());
-      return;
-   }
-
+   // A first guess from screens.pup; OnLabelSet checks it against the score label.
    // Screen 1 (DMD) is the primary scoreview screen if active
    auto screen1 = GetScreen(PUP_SCREEN_DMD);
    if (screen1 && screen1->GetMode() != PUPScreen::Mode::Off && screen1->GetMode() != PUPScreen::Mode::MusicOnly) {
@@ -228,11 +218,35 @@ void PUPManager::DetermineScoreViewScreen(const string& szRomName)
    }
 }
 
+void PUPManager::OnLabelSet(const PUPScreen* pScreen, const string& szLabel, const string& szCaption, bool visible)
+{
+   if (m_scoreTracker.IsDecided())
+      return;
+   const PUPScreen* pRoot = pScreen;
+   for (int depth = 0; depth < 8 && pRoot->GetParent() && pRoot->GetParent() != pRoot; depth++)
+      pRoot = pRoot->GetParent();
+   const int screenNum = m_scoreTracker.OnLabelSet(pRoot->GetScreenNum(), pScreen->GetScreenNum(), szLabel, szCaption, visible, m_scoreViewScreenNum);
+   if (screenNum < 0)
+      return;
+   if (screenNum == m_scoreViewScreenNum) {
+      LOGI("ScoreView screen: %d - shows the score (label %s on screen %d)", screenNum, szLabel.c_str(), pScreen->GetScreenNum());
+      return;
+   }
+   auto screen = GetScreen(screenNum);
+   if (!screen || screen->GetMode() == PUPScreen::Mode::Off || screen->GetMode() == PUPScreen::Mode::MusicOnly) {
+      LOGI("ScoreView screen: %d kept; the score label %s is on screen %d, which is not shown", m_scoreViewScreenNum, szLabel.c_str(), screenNum);
+      return;
+   }
+   LOGI("ScoreView screen: %d (%s) - the score is drawn there (label %s on screen %d)", screenNum, screen->GetScreenDes().c_str(), szLabel.c_str(), pScreen->GetScreenNum());
+   m_scoreViewScreenNum = screenNum;
+}
+
 void PUPManager::Unload()
 {
    Stop();
 
    m_scoreViewScreenNum = -1;
+   m_scoreTracker.Reset();
    m_screenMap.clear();
 
    UnloadFonts();

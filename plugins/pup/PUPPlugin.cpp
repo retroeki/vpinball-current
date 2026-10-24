@@ -116,6 +116,8 @@ PSC_CLASS_START(PUPPinDisplay)
    PSC_FUNCTION8(PUPPinDisplay, void, playevent, int, string, string, int, int, int, int, string)
    PSC_FUNCTION5(PUPPinDisplay, void, SetPosVideo, int, int, int, int, string)
    PSC_FUNCTION0(PUPPinDisplay, void, PuPClose)
+   // Android only, called by SimpleScriptPatcher instead of reading ScreenType.txt
+   PSC_FUNCTION1(PUPPinDisplay, string, ReadScreenType, string)
 PSC_CLASS_END(PUPPinDisplay)
 
 

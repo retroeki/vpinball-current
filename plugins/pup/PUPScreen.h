@@ -39,6 +39,7 @@ public:
    static std::unique_ptr<PUPScreen> CreateDefault(PUPManager* manager, int screenNum, const std::vector<PUPPlaylist*>& playlists);
 
    PUPManager* GetManager() const { return m_pManager; }
+   PUPScreen* GetParent() const { return m_pParent; }
    int GetScreenNum() const { return m_screenNum; }
    const string& GetScreenDes() const { return m_screenDes; }
    string ToString(bool full = true) const;

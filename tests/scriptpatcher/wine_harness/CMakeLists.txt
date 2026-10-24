@@ -1,7 +1,7 @@
 # Host build of the vendored Wine vbscript engine + the vbs_check driver.
 # Same Wine source set and defines as make/CMakeLists_common_standalone.txt.
 cmake_minimum_required(VERSION 3.20)
-project(vbs_check C)
+project(vbs_check C CXX)
 
 set(VPX_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../..)
 set(WINE ${VPX_ROOT}/standalone/inc/wine)
@@ -68,4 +68,10 @@ target_compile_definitions(vbs_check PRIVATE
 )
 
 target_compile_options(vbs_check PRIVATE -Wno-format -w)
-target_link_libraries(vbs_check PRIVATE m)
+# PuPlayer.ReadScreenType answers with the plugin's own code (plugins/pup/PUPScreenType.h),
+# built apart from the Wine sources so their include directories stay out of the C++ headers.
+add_library(pup_screentype STATIC pup_screentype.cpp)
+set_target_properties(pup_screentype PROPERTIES CXX_STANDARD 20)
+target_include_directories(pup_screentype PRIVATE ${VPX_ROOT}/plugins/pup)
+
+target_link_libraries(vbs_check PRIVATE pup_screentype m)

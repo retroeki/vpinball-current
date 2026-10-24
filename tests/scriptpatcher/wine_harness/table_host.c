@@ -463,6 +463,9 @@ static ITypeInfoVtbl TypeInfoVtbl = {
 
 // --- GetTextFile -----------------------------------------------------------------
 
+// pup_screentype.cpp: plugins/pup/PUPScreenType.h's Resolve.
+void pup_read_screen_type(const char* path, char* out, size_t size);
+
 static HRESULT get_text_file(const VARIANT* arg, VARIANT* result)
 {
    // Called from a Sub the name arrives by reference (VT_BYREF|VT_VARIANT).
@@ -648,6 +651,35 @@ static HRESULT WINAPI Any_Invoke(IDispatch* iface, DISPID id, REFIID riid, LCID 
       for (size_t k = 0; root[k]; k++)
          V_BSTR(result)[k] = (WCHAR)(unsigned char)root[k];
       return S_OK;
+   }
+   // PUPPinDisplay::ReadScreenType, which SimpleScriptPatcher puts in place of the
+   // ScreenType.txt read: the same code as the plugin, over the table dir's pupvideos.
+   if (This->is_pup_player && !wcscasecmp(s->name, L"ReadScreenType") && args == 1 && result) {
+      VARIANT arg;
+      VariantInit(&arg);
+      if (FAILED(VariantChangeType(&arg, &dp->rgvarg[0], 0, VT_BSTR)))
+         return DISP_E_TYPEMISMATCH;
+      char path[1200], value[64];
+      size_t n = 0;
+      for (const WCHAR* c = V_BSTR(&arg); c && *c && n + 1 < sizeof(path); c++)
+         path[n++] = (char)*c;
+      path[n] = 0;
+      VariantClear(&arg);
+      pup_read_screen_type(path, value, sizeof(value));
+      V_VT(result) = VT_BSTR;
+      V_BSTR(result) = SysAllocStringLen(NULL, (UINT)strlen(value));
+      for (size_t k = 0; value[k]; k++)
+         V_BSTR(result)[k] = (WCHAR)(unsigned char)value[k];
+      return S_OK;
+   }
+   // VBS_HARNESS_LOG_PUP=1 prints the screens a table gives labels (the screen its pDMD
+   // resolved to), for tests that check which PuP screen gets the score.
+   if (This->is_pup_player && getenv("VBS_HARNESS_LOG_PUP") && args >= 1
+       && (!wcscasecmp(s->name, L"LabelInit") || !wcscasecmp(s->name, L"LabelNew"))) {
+      VARIANT screen;
+      VariantInit(&screen);
+      if (SUCCEEDED(VariantChangeType(&screen, &dp->rgvarg[args - 1], 0, VT_I4)))
+         fprintf(stderr, "pup %ls %d\n", s->name, (int)V_I4(&screen));
    }
    if (This->is_global && !wcscasecmp(s->name, L"GetBalls") && result) {
       V_VT(result) = VT_ARRAY | VT_VARIANT;

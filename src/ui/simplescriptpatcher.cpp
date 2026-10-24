@@ -1350,13 +1350,30 @@ std::string SimpleScriptPatcher::PatchControllerPause(const std::string& script)
 }
 
 // =============================================================================
-// PinUp Player file access patch - Android doesn't have these files
-// Pattern: Code that reads DMDType from a PinUp Player ScreenType.txt file
-// This is Windows-specific and will fail on Android. Comment out and set default.
+// PinUp Player ScreenType.txt read (Darkest Dungeon, Terrifier, BTILC, Blizzard
+// of Ozz, Thundercats)
+// Pattern: pupPackScreenFile = PuPlayer.GetRoot & "<pack>\ScreenType.txt", then
+//          ObjFso.OpenTextFile(pupPackScreenFile) and DMDType = ObjFile.ReadLine.
+// The file is written by the layout .bat the user runs on Windows. On the device
+// it holds whatever the pack's zip shipped, or there is no pack and OpenTextFile
+// fails. The open is commented out and the read goes to PuPlayer.ReadScreenType
+// (plugins/pup/PUPScreenType.h): the value for the layout the pack is set to, or
+// "1" without a pack. Without the GetRoot idiom the value is "1", as before.
 // =============================================================================
 std::string SimpleScriptPatcher::PatchPinUpPlayerFileAccess(const std::string& script) {
     std::string r = script;
     int count = 0;
+
+    // PuPlayer.ReadScreenType(pupPackScreenFile) when the path variable was built from
+    // the PuP object's GetRoot, else "" (the caller keeps the "1" default).
+    auto readScreenType = [&script](const std::string& pathVar) -> std::string {
+        static const RE2 identifier(R"(\w+)");
+        if (!RE2::FullMatch(pathVar, identifier))
+            return std::string();
+        const RE2 built("(?i)\\b" + RE2::QuoteMeta(pathVar) + "\\s*=\\s*(\\w+)\\.GetRoot\\b");
+        std::string pup;
+        return RE2::PartialMatch(script, built, &pup) ? pup + ".ReadScreenType(" + pathVar + ")" : std::string();
+    };
 
     // Comment out: Dim ObjFso: Set ObjFso = CreateObject("Scripting.FileSystemObject")
     static const RE2 p1(R"((?i)(^|\n)([ \t]*)(Dim\s+ObjFso\s*:\s*Set\s+ObjFso\s*=\s*CreateObject\s*\(\s*"Scripting\.FileSystemObject"\s*\)))");
@@ -1366,16 +1383,21 @@ std::string SimpleScriptPatcher::PatchPinUpPlayerFileAccess(const std::string& s
     });
 
     // Comment out: Dim ObjFile: Set ObjFile = ObjFso.OpenTextFile(...)
-    static const RE2 p2(R"((?i)(^|\n)([ \t]*)(Dim\s+ObjFile\s*:\s*Set\s+ObjFile\s*=\s*ObjFso\.OpenTextFile\s*\([^)]*\)))");
-    r = RE2ReplaceWithCallback(r, p2, [&count](const RE2Match& m) -> std::string {
+    static const RE2 p2(R"((?i)(^|\n)([ \t]*)(Dim\s+ObjFile\s*:\s*Set\s+ObjFile\s*=\s*ObjFso\.OpenTextFile\s*\(\s*([^)]*?)\s*\)))");
+    std::string screenFileVar;
+    r = RE2ReplaceWithCallback(r, p2, [&count, &screenFileVar](const RE2Match& m) -> std::string {
         count++;
+        if (screenFileVar.empty())
+            screenFileVar = std::string(m[4]);
         return std::string(m[1]) + std::string(m[2]) + "' " + std::string(m[3]) + " ' Disabled for Android";
     });
 
-    // Replace: Dim DMDType: DMDType = ObjFile.ReadLine -> Dim DMDType: DMDType = "1"
+    // Replace: Dim DMDType: DMDType = ObjFile.ReadLine
     static const RE2 p3(R"((?i)(Dim\s+DMDType\s*:\s*DMDType\s*=\s*)ObjFile\.ReadLine)");
+    const std::string dimRead = readScreenType(screenFileVar);
     std::string before = r;
-    r = RE2Replace(r, p3, "\\1\"1\" ' Default for Android (was ObjFile.ReadLine)");
+    r = RE2Replace(r, p3, dimRead.empty() ? "\\1\"1\" ' Default for Android (was ObjFile.ReadLine)"
+                                          : "\\1" + dimRead + " ' Android: the PuP pack's layout (was ObjFile.ReadLine)");
     if (r != before) count++;
 
     // Same read with the variables declared earlier (BTILC, Blizzard of Ozz,
@@ -1390,11 +1412,14 @@ std::string SimpleScriptPatcher::PatchPinUpPlayerFileAccess(const std::string& s
     });
     if (screenFileReads > 0) {
         count += screenFileReads;
+        const std::string read = readScreenType("pupPackScreenFile");
         static const RE2 p3v(R"((?i)(^|\n)([ \t]*DMDType\s*=\s*)(CInt\s*\(\s*ObjFile\.ReadLine\s*\)|ObjFile\.ReadLine))");
-        r = RE2ReplaceWithCallback(r, p3v, [&count](const RE2Match& m) -> std::string {
+        r = RE2ReplaceWithCallback(r, p3v, [&count, &read](const RE2Match& m) -> std::string {
             count++;
             const bool numeric = std::string(m[3]).find('(') != std::string::npos;
-            return std::string(m[1]) + std::string(m[2]) + (numeric ? "1" : "\"1\"") + " ' Default for Android (was " + std::string(m[3]) + ")";
+            if (read.empty())
+                return std::string(m[1]) + std::string(m[2]) + (numeric ? "1" : "\"1\"") + " ' Default for Android (was " + std::string(m[3]) + ")";
+            return std::string(m[1]) + std::string(m[2]) + (numeric ? "CInt(" + read + ")" : read) + " ' Android: the PuP pack's layout (was " + std::string(m[3]) + ")";
         });
     }
 

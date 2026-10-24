@@ -1,0 +1,10 @@
+ScreenNum,ScreenDes,PlayList,PlayFile,Loopit,Active,Priority,CustomPos
+0,Topper,topper,topper1.mp4,0,show,,
+1,DMD,PuPFrames,2-background.mp4,0,ForceBack,,
+2,Backglass,backglass,base.mp4,0,ForceBack,,
+3,PlayField,,,0,off,,
+4,Music,,,0,MusicOnly,,
+7,Audio,,,0,MusicOnly,,
+8,Callouts,,,0,MusicOnly,,
+14,Overlay,,,0,ForcePopBack,,"2,0,0,100,100"
+15,Game,,,0,ForcePop,,"2,0,0,100,100"

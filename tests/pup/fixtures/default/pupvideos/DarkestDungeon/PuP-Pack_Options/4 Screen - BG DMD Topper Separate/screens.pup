@@ -1,0 +1,21 @@
+ScreenNum,ScreenDes,PlayList,PlayFile,Loopit,Active,Priority,CustomPos
+0,Topper,,,0,ForceOn,,
+13,"DMD Info",,,0,ForcePop,,"5,0,0,100,100"
+1,DMD,,,0,off,,
+2,Backglass,,,0,ForcePopBack,,
+3,PlayField,,,0,off,,
+4,Music,,,0,MusicOnly,,
+5,FULLDMD,,,0,ForceBack,,
+6,"PuP 6",,,0,off,,
+7,"PuP 7",,,0,off,,
+8,Callouts,,,0,MusicOnly,,
+9,Other,,,0,off,,
+10,"PuP 10",,,0,off,,
+11,"PuP 11",,,0,off,,
+12,"BG Overlay",,,0,ForceBack,,"2,0,0,100,100"
+14,"DMD Overlay",,,0,ForcePop,,"5,0,0,100,100"
+15,"PuP 15",,,0,off,,
+16,"PuP 16",,,0,off,,
+17,"PuP 17",,,0,off,,
+18,"PuP 18",,,0,off,,
+19,"PuP 19",,,0,off,,

@@ -1,0 +1,7 @@
+ScreenNum,ScreenDes,PlayList,PlayFile,Loopit,Active,Priority,CustomPos
+2,Backglass,,,0,ForcePop,,
+12,"BG Overlay",,,0,ForcePop,,"2,20.9,40.6,58.1,56.7"
+4,Music,,,0,MusicOnly,,
+17,"Slot Reel 1",,,0,ForcePop,,"2,37.5,64.1,6.95,11.95"
+18,"Slot Reel 2",,,0,ForcePop,,"2,45.7,64.1,6.95,11.95"
+19,"Slot Reel 3",,,0,ForcePop,,"2,53.8,64.1,6.95,11.95"

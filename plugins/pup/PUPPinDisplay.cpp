@@ -5,6 +5,7 @@
 #include "PUPManager.h"
 #include "PUPScreen.h"
 #include "PUPLabel.h"
+#include "PUPScreenType.h"
 
 #include <iostream>
 #include <fstream>
@@ -487,6 +488,7 @@ void PUPPinDisplay::LabelSet(int screenNum, const string& LabelName, const strin
    pLabel->SetCaption(Caption);
    pLabel->SetVisible(Visible);
    pLabel->SetSpecial(Special);
+   m_pupManager.OnLabelSet(pScreen.get(), LabelName, Caption, Visible);
 }
 
 void PUPPinDisplay::LabelSetEx()
@@ -594,6 +596,14 @@ string PUPPinDisplay::GetVersion() const
    constexpr int nVersionNo2 = 99;
    constexpr int nVersionNo3 = 99;
    return std::to_string(nVersionNo0) + '.' + std::to_string(nVersionNo1) + '.' + std::to_string(nVersionNo2) + '.' + std::to_string(nVersionNo3);
+}
+
+string PUPPinDisplay::ReadScreenType(const string& path) const
+{
+   string how;
+   const string value = ScreenType::Resolve(path, &how);
+   LOGI("ScreenType for %s: '%s' from %s", path.c_str(), value.c_str(), how.c_str());
+   return value;
 }
 
 /* STDMETHODIMP PUPPinDisplay::GrabDC2(int pWidth, int pHeight, BSTR wintitle, SAFEARRAY** pixels)
