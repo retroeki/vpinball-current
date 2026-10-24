@@ -122,6 +122,14 @@ const TablePatch kTablePatches[] = {
    // so OpenTextFile failed (E_FAIL) in global code. GetTextFile serves the bundled core.vbs.
    { "rpdr.vpx", "Include(\"../scripts/core.vbs\")", "ExecuteGlobal GetTextFile(\"core.vbs\")", false,
      "rpdr: load core.vbs from the app's bundled scripts instead of ../scripts/" },
+   // Darkest Dungeon 3.06: CheckPupVersion (called from init) opens PuPlayer.GetRoot's
+   // parent folder to read the Windows PinUPDisplayX.exe version. Without the PuP pack
+   // GetRoot is "" on the device (plugins/pup PUPManager::EnsureRootPath), GetFolder("")
+   // fails with 76 and the rest of Table1_Init is skipped. The check only shows a reminder
+   // when the exe is old, so skip it when there is no PuP folder; the table then starts.
+   { "DarkestDungeon_3.06.vpx", "set pFolder = fso.GetFolder(PuPlayer.getroot)",
+     "If PuPlayer.getroot = \"\" Then Exit Sub\r\n       set pFolder = fso.GetFolder(PuPlayer.getroot)", false,
+     "Darkest Dungeon: skip the PinUP exe version check when the PuP pack is not installed" },
 };
 const size_t kTablePatchCount = sizeof(kTablePatches) / sizeof(kTablePatches[0]);
 

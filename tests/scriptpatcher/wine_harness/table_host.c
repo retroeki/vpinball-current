@@ -30,6 +30,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
+#include <sys/stat.h>
 
 #define COBJMACROS
 #include "windef.h"
@@ -53,6 +54,7 @@ typedef struct AnyObject {
    int member_count;
    Slot* slots;
    int count, cap;
+   int is_pup_player; // CreateObject("PinUpPlayer.PinDisplay")
 } AnyObject;
 
 static char g_scripts_dir[1024];
@@ -629,6 +631,24 @@ static HRESULT WINAPI Any_Invoke(IDispatch* iface, DISPID id, REFIID riid, LCID 
       V_BSTR(result) = SysAllocString(g_user_dir);
       return S_OK;
    }
+   // PUPPinDisplay::GetGetRoot (plugins/pup): the pupvideos folder next to the table,
+   // with its trailing separator, or "" when there is none.
+   if (This->is_pup_player && !wcscasecmp(s->name, L"GetRoot") && args == 0 && result) {
+      char root[1100] = "";
+      struct stat st;
+      if (g_table_dir[0]) {
+         snprintf(root, sizeof(root), "%s/pupvideos", g_table_dir);
+         if (stat(root, &st) || !S_ISDIR(st.st_mode))
+            root[0] = 0;
+         else
+            strcat(root, "/");
+      }
+      V_VT(result) = VT_BSTR;
+      V_BSTR(result) = SysAllocStringLen(NULL, (UINT)strlen(root));
+      for (size_t k = 0; root[k]; k++)
+         V_BSTR(result)[k] = (WCHAR)(unsigned char)root[k];
+      return S_OK;
+   }
    if (This->is_global && !wcscasecmp(s->name, L"GetBalls") && result) {
       V_VT(result) = VT_ARRAY | VT_VARIANT;
       V_ARRAY(result) = SafeArrayCreateVector(VT_VARIANT, 0, 0);
@@ -863,5 +883,7 @@ IUnknown* table_host_create_object(const WCHAR* progid)
       if (!known)
          return NULL;
    }
-   return (IUnknown*)&any_new(0)->IDispatch_iface;
+   AnyObject* o = any_new(0);
+   o->is_pup_player = !wcscasecmp(progid, L"PinUpPlayer.PinDisplay");
+   return (IUnknown*)&o->IDispatch_iface;
 }

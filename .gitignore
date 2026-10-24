@@ -16,6 +16,8 @@ fastlane/
 tmp
 
 CMakeLists.txt
+!tests/scriptpatcher/wine_harness/CMakeLists.txt
+!tests/scriptpatcher/corpus_harness/CMakeLists.txt
 external
 third-party/*
 

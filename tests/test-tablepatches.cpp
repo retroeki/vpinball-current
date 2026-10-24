@@ -132,6 +132,10 @@ int main() {
             "rpdr: core.vbs comes from GetTextFile");
       CHECK(ApplyTableSpecificPatches(cc, "SomeOther.vpx") == cc && ApplyTableSpecificPatches(ra, "SomeOther.vpx") == ra,
             "triage patches: no-op on an unregistered table");
+      const std::string dd = "       set pFolder = fso.GetFolder(PuPlayer.getroot)\r\n";
+      CHECK(ApplyTableSpecificPatches(dd, "DarkestDungeon_3.06.vpx")
+               == "       If PuPlayer.getroot = \"\" Then Exit Sub\r\n       set pFolder = fso.GetFolder(PuPlayer.getroot)\r\n",
+            "Darkest Dungeon: PinUP version check skipped when there is no PuP folder");
    }
    printf("%s (%d failures)\n", g_fail ? "FAILURES" : "ALL PASS", g_fail);
    return g_fail ? 1 : 0;
