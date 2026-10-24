@@ -67,7 +67,9 @@ def main():
         if not code:
             fail.append((base, "no CODE/GameData stream"))
             continue
-        with open(os.path.join(out, base + ".vbs"), "w", encoding="latin-1") as o:
+        # newline="" keeps the script's own CRLFs; text mode on Windows would
+        # turn each one into CR CR LF, which doubles every line break.
+        with open(os.path.join(out, base + ".vbs"), "w", encoding="latin-1", newline="") as o:
             o.write(code)
         ok += 1
     print(f"Extracted {ok}/{len(files)} scripts to {out}")
