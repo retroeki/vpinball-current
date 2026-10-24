@@ -154,6 +154,8 @@ int main(int argc, char** argv)
       std::ifstream in(dataDir + "/expected_layouts.tsv");
       for (std::string line; std::getline(in, line);)
       {
+         if (!line.empty() && line.back() == '\r') // CRLF checkouts
+            line.pop_back();
          if (line.empty() || line[0] == '#')
             continue;
          const size_t tab = line.find('\t');
@@ -166,6 +168,8 @@ int main(int argc, char** argv)
    std::ifstream in(dataDir + "/rom_displays.tsv");
    for (std::string line; std::getline(in, line);)
    {
+      if (!line.empty() && line.back() == '\r')
+         line.pop_back();
       if (line.empty() || line[0] == '#')
          continue;
       std::vector<std::string> cols;
