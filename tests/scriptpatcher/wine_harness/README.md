@@ -100,19 +100,20 @@ python3 corpus_check.py --raw $C/scripts_raw --patched $C/scripts_patched --host
     --items $C/items --companions $C/companions --relaunch
 ```
 
-Baselines 2026-10-23, with `--relaunch`, built with AddressSanitizer (no memory
-errors anywhere):
+Baselines, with `--relaunch`, built with AddressSanitizer (no memory errors
+anywhere). In `C:\vpx_patcher_corpus`:
 
 | Library | Tables | Raw clean | Patched clean | Patcher broke | TSV |
 |---|---|---|---|---|---|
-| G:\VPX Files | 634 | 621 | 622 | Big Town | `wine_relaunch_2026-10-23.tsv` |
-| Visual Pinball (2026-01-02) zips | 700 | 695 | 696 | none | `wine_relaunch_vp_2026-01-02.tsv` |
+| G:\VPX Files, before the crash-fixes-2026-10-23 branch | 634 | 621 | 622 | Big Town | `wine_relaunch_2026-10-23.tsv` |
+| G:\VPX Files, after | 634 | 624 | 630 | none | `wine_final_2026-10-23.tsv` |
+| Visual Pinball (2026-01-02) zips, before | 700 | 695 | 696 | none | `wine_relaunch_vp_2026-01-02.tsv` |
+| Visual Pinball (2026-01-02) zips, after | 700 | 697 | 698 | none | `wine_final_vp_2026-01-02.tsv` |
 
-Patcher fixed Jurassic Park (both libraries) and Thundercats. Remaining
-failures: bug T (3 Kiwi `Trim` tables), U (Loony Labyrinth), V (PinballMagic),
-PuP pack files missing (BTILC, Blizzard of Ozz, Terrifier, Darkest Dungeon),
-4X4 (500, cluster F), and stand-in limits (Munsters `GetFolder`, CyberRace,
-Space Station, Defender `Controller.NVRAM`, Heavy Metal `Controller.Games().Settings`).
+"After" uses `scripts_patched_fix_2026-10-23` and `vp_2026-01-02/scripts_patched_fix`.
+Remaining: 4X4 (500, cluster F: runtime error in top-level code, policy
+undecided) and stand-in limits (Munsters, CyberRace, Space Station, Defender
+`Controller.NVRAM`, Heavy Metal `Controller.Games().Settings` on exit).
 
 ### Memory errors
 
