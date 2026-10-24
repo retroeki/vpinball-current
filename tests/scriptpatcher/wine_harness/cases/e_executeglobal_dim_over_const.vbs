@@ -1,6 +1,6 @@
 ' EXPECT: run-ok
 ' WINDOWS: ok
-' KNOWN-BUG: E exec_global_code skips a Dim whose name matches an existing global Const, so the next assignment fails (vbscript.c)
+' FIXED (crash-fixes-2026-10-23): E exec_global_code skips a Dim whose name matches an existing global Const, so the next assignment fails (vbscript.c)
 ' FROM: Space Jam: table Const Bsize vs core.vbs Dim BSize (42 reports, 2026-10-23)
 ' Windows: the ExecuteGlobal Dim creates its own variable; the rest of the code runs.
 Option Explicit

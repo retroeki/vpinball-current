@@ -82,6 +82,7 @@ typedef struct {
 
     const_decl_t *const_decls;
     const_decl_t *global_consts;
+    dim_decl_t *global_dims;
 
     function_t *func;
     function_decl_t *func_decls;
@@ -485,6 +486,28 @@ static BOOL lookup_dim_decls(compile_ctx_t *ctx, const WCHAR *name)
 
     for(dim_decl = ctx->dim_decls; dim_decl; dim_decl = dim_decl->next) {
         if(!vbs_wcsicmp(dim_decl->name, name))
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
+/* VPX: a script-level Function, Sub or Class name may only collide with a
+ * script-level Dim or Const. ctx->dim_decls/const_decls cannot be used for that
+ * once functions are compiled: compile_func replaces them with the locals of the
+ * function compiled last, so a function was rejected when the function after it
+ * declared a local of the same name (Pink Floyd: Function PI(), error 1041). */
+static BOOL lookup_global_decls(compile_ctx_t *ctx, const WCHAR *name)
+{
+    dim_decl_t *dim_decl;
+    const_decl_t *const_decl;
+
+    for(dim_decl = ctx->global_dims; dim_decl; dim_decl = dim_decl->next) {
+        if(!vbs_wcsicmp(dim_decl->name, name))
+            return TRUE;
+    }
+    for(const_decl = ctx->global_consts; const_decl; const_decl = const_decl->next) {
+        if(!vbs_wcsicmp(const_decl->name, name))
             return TRUE;
     }
 
@@ -1905,12 +1928,6 @@ static HRESULT create_function(compile_ctx_t *ctx, function_decl_t *decl, functi
     function_t *func;
     HRESULT hres;
 
-    if(lookup_dim_decls(ctx, decl->name) || lookup_const_decls(ctx, decl->name, FALSE)) {
-        ctx->loc = decl->name_loc;
-        WARN("%s: redefinition\n", debugstr_w(decl->name));
-        return MAKE_VBSERROR(VBSE_NAME_REDEFINED);
-    }
-
     func = compiler_alloc(ctx->code, sizeof(*func));
     if(!func)
         return E_OUTOFMEMORY;
@@ -2030,8 +2047,8 @@ static HRESULT compile_class(compile_ctx_t *ctx, class_decl_t *class_decl)
     unsigned i;
     HRESULT hres;
 
-    if(lookup_dim_decls(ctx, class_decl->name) || lookup_funcs_name(ctx, class_decl->name)
-            || lookup_const_decls(ctx, class_decl->name, FALSE) || lookup_class_name(ctx, class_decl->name)) {
+    if(lookup_global_decls(ctx, class_decl->name) || lookup_funcs_name(ctx, class_decl->name)
+            || lookup_class_name(ctx, class_decl->name)) {
         ctx->loc = class_decl->loc;
         WARN("%s: redefinition\n", debugstr_w(class_decl->name));
         return MAKE_VBSERROR(VBSE_NAME_REDEFINED);
@@ -2367,6 +2384,7 @@ HRESULT compile_script(script_ctx_t *script, const WCHAR *src, const WCHAR *item
 
     code->option_explicit = ctx.parser.option_explicit;
     ctx.global_consts = ctx.const_decls;
+    ctx.global_dims = ctx.dim_decls;
     code->option_explicit = ctx.parser.option_explicit;
 
     {
@@ -2378,7 +2396,14 @@ HRESULT compile_script(script_ctx_t *script, const WCHAR *src, const WCHAR *item
 
     for(func_decl = ctx.func_decls; func_decl; func_decl = func_decl->next) {
         COMPILE_INFO("Compiling function: %ls\n", func_decl->name);
-        hres = create_function(&ctx, func_decl, &new_func);
+        /* VPX: script-level names only; class members have their own namespace. */
+        if(lookup_global_decls(&ctx, func_decl->name)) {
+            ctx.loc = func_decl->name_loc;
+            WARN("%s: redefinition\n", debugstr_w(func_decl->name));
+            hres = MAKE_VBSERROR(VBSE_NAME_REDEFINED);
+        }else {
+            hres = create_function(&ctx, func_decl, &new_func);
+        }
         if(FAILED(hres)) {
             COMPILE_LOG("create_function FAILED for '%ls': hres=0x%08lx\n", func_decl->name, (unsigned long)hres);
             hres = compile_error(script, &ctx, hres);

@@ -241,6 +241,7 @@ struct _script_ctx_t {
     struct list objects;
     struct list code_list;
     struct list named_items;
+    unsigned builtin_named_items; /* VPX: visible named items that share a built-in function's name */
 };
 
 HRESULT init_global(script_ctx_t*);

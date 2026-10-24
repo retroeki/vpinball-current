@@ -281,6 +281,17 @@ static HRESULT lookup_identifier(exec_ctx_t *ctx, BSTR name, vbdisp_invoke_type_
 
     hres = get_builtin_id(ctx->script->global_obj, name, &id);
     if(SUCCEEDED(hres)) {
+        /* VPX: a table element shadows a built-in function of the same name, as
+         * in Windows (Kiwi Gottlieb tables: element Trim, "Trim.visible = ..."
+         * failed with 450 and the rest of Table1_Init was skipped). */
+        if(ctx->script->builtin_named_items) {
+            item = lookup_named_item(ctx->script, name, SCRIPTITEM_ISVISIBLE);
+            if(item && item->disp) {
+                ref->type = REF_OBJ;
+                ref->u.obj = item->disp;
+                return S_OK;
+            }
+        }
         ref->type = REF_DISP;
         ref->u.d.disp = &ctx->script->global_obj->IDispatch_iface;
         ref->u.d.id = id;
@@ -784,6 +795,19 @@ static HRESULT do_icall(exec_ctx_t *ctx, VARIANT *res, BSTR identifier, unsigned
         return hres;
     }
 
+    /* VPX: an element named like a built-in shadows it (lookup_identifier), but a
+     * call with arguments still gets the built-in. Windows raises 450 there, yet
+     * core.vbs calls Left(UserDirectory, ...) in tables that have a wall called
+     * Left (Sharp Shooter II, Munsters). */
+    if(ref.type == REF_OBJ && arg_cnt && ctx->script->builtin_named_items) {
+        DISPID builtin_id;
+        if(SUCCEEDED(get_builtin_id(ctx->script->global_obj, identifier, &builtin_id))) {
+            ref.type = REF_DISP;
+            ref.u.d.disp = &ctx->script->global_obj->IDispatch_iface;
+            ref.u.d.id = builtin_id;
+        }
+    }
+
     switch(ref.type) {
     case REF_VAR:
     case REF_CONST:
@@ -860,7 +884,10 @@ static HRESULT do_icall(exec_ctx_t *ctx, VARIANT *res, BSTR identifier, unsigned
                 if(FAILED(hres))
                     return hres;
 
-                IDispatch_AddRef(V_DISPATCH(res));
+                /* VPX: only an object result has a reference to take; a number
+                 * here was dereferenced as a pointer (SIGSEGV). */
+                if(V_VT(res) == VT_DISPATCH && V_DISPATCH(res))
+                    IDispatch_AddRef(V_DISPATCH(res));
 
                 break;
             }
@@ -1393,6 +1420,23 @@ static HRESULT interp_assign_call(exec_ctx_t *ctx) { FIXME("not implemented\n");
 static HRESULT interp_set_call(exec_ctx_t *ctx)    { FIXME("not implemented\n"); return E_NOTIMPL; }
 #endif
 
+/* VPX: whether ref is a member of a SCRIPTITEM_GLOBALMEMBERS object (the table's
+ * ScriptGlobalTable). A script Const may take such a name, as in Windows: global
+ * vars are looked up before those members, so the Const shadows it (Fantastic
+ * Journey: Const MusicVolume, Gargamel Park: Const Version). */
+static BOOL is_global_members_ref(exec_ctx_t *ctx, const ref_t *ref)
+{
+    named_item_t *item;
+
+    if(ref->type != REF_DISP)
+        return FALSE;
+    LIST_FOR_EACH_ENTRY(item, &ctx->script->named_items, named_item_t, entry) {
+        if((item->flags & SCRIPTITEM_GLOBALMEMBERS) && item->disp == ref->u.d.disp)
+            return TRUE;
+    }
+    return FALSE;
+}
+
 static HRESULT interp_const(exec_ctx_t *ctx)
 {
     BSTR arg = ctx->instr->arg1.bstr;
@@ -1408,7 +1452,7 @@ static HRESULT interp_const(exec_ctx_t *ctx)
     if(FAILED(hres))
         return hres;
 
-    if(ref.type != REF_NONE) {
+    if(ref.type != REF_NONE && !is_global_members_ref(ctx, &ref)) {
         WARN("%s already defined\n", debugstr_w(arg));
         return MAKE_VBSERROR(VBSE_NAME_REDEFINED);
     }

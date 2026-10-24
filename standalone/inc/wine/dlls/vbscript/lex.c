@@ -137,6 +137,22 @@ static inline BOOL is_identifier_char(WCHAR c)
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
 }
 
+/* VPX: reserved words that are never an object, so a '.' written right after
+ * one starts a With member or a number, as in Windows (BarbWire inside With:
+ * "If x = 1 then.Games(cGameName)..."). Keywords that may also name a variable
+ * (Step, Default, Error, Explicit, Property) are left out. */
+static inline BOOL is_keyword_before_dot_expr(int token)
+{
+    switch(token) {
+    case tTHEN: case tELSE: case tTO: case tIN: case tCASE: case tWHILE: case tUNTIL:
+    case tAND: case tOR: case tXOR: case tEQV: case tIMP: case tNOT: case tMOD: case tIS:
+    case tCALL: case tSET:
+        return TRUE;
+    default:
+        return FALSE;
+    }
+}
+
 /* Compare the current parse position against a keyword using ASCII-only
  * case-insensitive matching. Keywords are all lowercase ASCII, so we only
  * need to lowercase [A-Z] in the source. Returns 0 on match, <0 or >0
@@ -532,7 +548,12 @@ static int parse_next_token(void *lval, unsigned *loc, parser_ctx_t *ctx)
          * expression) and a floating point number like ".2" .
          */
         c = ctx->ptr > ctx->code ? ctx->ptr[-1] : '\n';
-        if (is_identifier_char(c) || c == ')') {
+        if ((is_identifier_char(c) || c == ')') && !is_keyword_before_dot_expr(ctx->last_token)) {
+            /* VPX: a member name cannot start with a digit, so ".0" right after a
+             * name is a number, as in Windows (PinballMagic: bsTrough.AddBall.0
+             * is AddBall 0). */
+            if (c != ')' && '0' <= ctx->ptr[1] && ctx->ptr[1] <= '9')
+                return parse_numeric_literal(ctx, lval);
             ctx->ptr++;
             return '.';
         }

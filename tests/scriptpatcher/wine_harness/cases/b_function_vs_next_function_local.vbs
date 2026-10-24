@@ -1,6 +1,6 @@
 ' EXPECT: run-ok
 ' WINDOWS: ok
-' KNOWN-BUG: B create_function checks a name against the previously compiled function's locals (compile.c)
+' FIXED (crash-fixes-2026-10-23): B create_function checks a name against the previously compiled function's locals (compile.c)
 ' FROM: Pink Floyd 3.28c line 4234 (65 reports, 2026-10-23)
 Option Explicit
 Function PI()

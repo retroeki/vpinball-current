@@ -1,6 +1,6 @@
 ' EXPECT: run-ok
 ' WINDOWS: ok
-' KNOWN-BUG: C lex.c treats the dot after Then as member access (previous char is an identifier char)
+' FIXED (crash-fixes-2026-10-23): C lex.c treats the dot after Then as member access (previous char is an identifier char)
 ' FROM: BarbWire/Tiki Bob/Break/Fallout/Kiss iDig/Tenacious D (62 reports, 2026-10-23)
 Class Box
   Public Value

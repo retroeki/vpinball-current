@@ -5096,13 +5096,17 @@ static HRESULT Err_Raise(BuiltinDisp *This, VARIANT *args, unsigned args_cnt, VA
     if(code == 0 || code > 0xffff)
         return E_INVALIDARG;
 
-    if(args_cnt >= 2)
+    /* VPX: a skipped argument (Err.Raise 8732, , "desc") arrives as
+     * DISP_E_PARAMNOTFOUND and is left unset, as in Windows; converting it raised
+     * a type mismatch instead of the requested error (Batman66 JSON parser). */
+#define ARG_GIVEN(i) (args_cnt > (i) && !(V_VT(args + (i)) == VT_ERROR && V_ERROR(args + (i)) == DISP_E_PARAMNOTFOUND))
+    if(ARG_GIVEN(1))
         hres = to_string(This->ctx->lcid, args + 1, &source);
-    if(args_cnt >= 3 && SUCCEEDED(hres))
+    if(ARG_GIVEN(2) && SUCCEEDED(hres))
         hres = to_string(This->ctx->lcid, args + 2, &description);
-    if(args_cnt >= 4 && SUCCEEDED(hres))
+    if(ARG_GIVEN(3) && SUCCEEDED(hres))
         hres = to_string(This->ctx->lcid, args + 3, &helpfile);
-    if(args_cnt >= 5 && SUCCEEDED(hres))
+    if(ARG_GIVEN(4) && SUCCEEDED(hres))
         hres = to_int(args + 4, &helpcontext);
 
     if(SUCCEEDED(hres)) {
@@ -5120,8 +5124,9 @@ static HRESULT Err_Raise(BuiltinDisp *This, VARIANT *args, unsigned args_cnt, VA
             SysFreeString(ctx->ei.bstrHelpFile);
             ctx->ei.bstrHelpFile = helpfile;
         }
-        if(args_cnt >= 5)
+        if(ARG_GIVEN(4))
             ctx->ei.dwHelpContext = helpcontext;
+#undef ARG_GIVEN
 
         ctx->ei.scode = (code & ~0xffff) ? code : MAKE_VBSERROR(code);
         map_vbs_exception(&ctx->ei);

@@ -148,8 +148,17 @@ HRESULT exec_global_code(script_ctx_t *ctx, vbscode_t *code, VARIANT *res, BOOL 
 
     for (i = 0; i < code->main_code.var_cnt; i++)
     {
-        if (script_disp_find_var(obj, code->main_code.vars[i].name))
+        dynamic_var_t *existing = script_disp_find_var(obj, code->main_code.vars[i].name);
+
+        /* VPX: a Dim in later code (ExecuteGlobal) over an existing global Const
+         * gets a variable of its own, as in Windows. Skipping it left the name a
+         * Const, so the code's next assignment failed with "Illegal assignment"
+         * (Space Jam: table Const Bsize, core.vbs Dim BSize: BSize = 25). Code
+         * that declared the Const has its value inlined and keeps seeing it. */
+        if (existing && !existing->is_const)
             continue;
+        if (existing)
+            rb_remove(&obj->var_tree, &existing->entry);
 
         if (!(var = heap_pool_alloc(&obj->heap, sizeof(*var))))
             return E_OUTOFMEMORY;
@@ -927,6 +936,14 @@ static HRESULT WINAPI VBScript_AddNamedItem(IActiveScript *iface, LPCOLESTR pstr
     }
 
     list_add_tail(&This->ctx->named_items, &item->entry);
+
+    /* VPX: lookup_identifier only searches the named items ahead of the built-ins
+     * when one of them shares a built-in's name (a table element called Trim). */
+    if((dwFlags & SCRIPTITEM_ISVISIBLE) && This->ctx->global_obj) {
+        DISPID id;
+        if(SUCCEEDED(get_builtin_id(This->ctx->global_obj, pstrName, &id)))
+            This->ctx->builtin_named_items++;
+    }
     return S_OK;
 }
 

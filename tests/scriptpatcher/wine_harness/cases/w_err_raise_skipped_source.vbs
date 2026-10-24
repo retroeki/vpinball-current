@@ -1,6 +1,6 @@
 ' EXPECT: run-ok
 ' WINDOWS: ok
-' KNOWN-BUG: W Err.Raise with a skipped Source argument raises 13 instead of the given number
+' FIXED (crash-fixes-2026-10-23): W Err.Raise with a skipped Source argument raises 13 instead of the given number
 ' Batman66 1.1.0 JSON parser: Err.Raise 8732 ,, "Expecting property name".
 On Error Resume Next
 Err.Raise 5, , "desc"

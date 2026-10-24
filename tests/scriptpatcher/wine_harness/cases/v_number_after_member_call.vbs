@@ -1,6 +1,6 @@
 ' EXPECT: run-ok
 ' WINDOWS: ok
-' KNOWN-BUG: V Wine lexes ".0" after a member name as another member access, not a number
+' FIXED (crash-fixes-2026-10-23): V Wine lexes ".0" after a member name as another member access, not a number
 ' PinballMagic v1.7 Drain_Hit: "bsTrough.AddBall.0" (Windows: AddBall 0). Compile error on device.
 Class C
   Public n
