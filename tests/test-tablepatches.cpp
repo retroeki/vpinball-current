@@ -113,6 +113,26 @@ int main() {
       CHECK(ApplyTableSpecificPatches(s, "SomeOther.vpx") == s,
             "reel-reset hoist: no-op on an unregistered table");
    }
+   // Crash triage 2026-10-23 (production registry), text copied from the field reports.
+   {
+      const std::string cc =
+         "Const PROC = 1\r\n\r\nLoadVBSFiles \"02800000\", \"WPC.VBS\", 3.52\r\n\r\nIf PROC = 1 Then\r\n"
+         "\tLoadController(\"PROC\")\r\nElse\r\n\tLoadController(\"VPM\")\r\nEnd If\r\n\r\n' Standard Options\r\n";
+      const std::string want = "\r\n\r\nLoadVPM \"02800000\", \"WPC.VBS\", 3.52\r\n\r\n' Standard Options\r\n";
+      CHECK(ApplyTableSpecificPatches(cc, "Cactus Canyon (Bally 1998) TTNZ v2.0.vpx") == "Const PROC = 1" + want,
+            "Cactus Canyon TTNZ: LoadVBSFiles + LoadController block becomes LoadVPM");
+      CHECK(ApplyTableSpecificPatches(cc, "Cactus Canyon Continued _TTNZ  v2.0.vpx") == "Const PROC = 0" + want,
+            "Cactus Canyon Continued TTNZ: LoadVPM, and the VPinMAME mode instead of P-ROC");
+      const std::string ra = "\tPlaySoundAt \"flip_hit_1\". Rubber32\r\n";
+      CHECK(ApplyTableSpecificPatches(ra, "Ramones (HauntFreaks 2021).vpx") == "\tPlaySoundAt \"flip_hit_1\", Rubber32\r\n",
+            "Ramones: '.' typo between PlaySoundAt arguments fixed");
+      CHECK(ApplyTableSpecificPatches(ra, "Ramones (HauntFreaks 2021) v2.0.vpx") == "\tPlaySoundAt \"flip_hit_1\", Rubber32\r\n",
+            "Ramones v2.0: '.' typo between PlaySoundAt arguments fixed");
+      CHECK(ApplyTableSpecificPatches("Include(\"../scripts/core.vbs\")\r\n", "rpdr.vpx") == "ExecuteGlobal GetTextFile(\"core.vbs\")\r\n",
+            "rpdr: core.vbs comes from GetTextFile");
+      CHECK(ApplyTableSpecificPatches(cc, "SomeOther.vpx") == cc && ApplyTableSpecificPatches(ra, "SomeOther.vpx") == ra,
+            "triage patches: no-op on an unregistered table");
+   }
    printf("%s (%d failures)\n", g_fail ? "FAILURES" : "ALL PASS", g_fail);
    return g_fail ? 1 : 0;
 }

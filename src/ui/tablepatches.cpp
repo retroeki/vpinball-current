@@ -92,6 +92,36 @@ const TablePatch kTablePatches[] = {
      "shows_added.Add cache_name, True",
      "If Not shows_added.Exists(cache_name) Then shows_added.Add cache_name, True", false,
      "Dark Chaos: tolerate duplicate fade cache names in a light-show step (VBS 457 storm on ball drain)" },
+   // Cactus Canyon TTNZ v2.0 (both builds) were written against a custom controller.vbs
+   // whose LoadVBSFiles takes (VPM version, VBS file, VBS version) and whose LoadController
+   // takes the table type alone. The bundled controller.vbs has LoadVBSFiles(VBSfile) and
+   // LoadController(TableType, VPMver, VBSfile, VBSver), so the first call failed with 450
+   // in global code and the table never started (crash triage 2026-10-23, cluster N, 7
+   // reports). LoadVPM does both steps with the same arguments.
+   { "Cactus Canyon (Bally 1998) TTNZ v2.0.vpx",
+     "LoadVBSFiles \"02800000\", \"WPC\\.VBS\", 3\\.52\\s+If PROC = 1 Then\\s+LoadController\\(\"PROC\"\\)\\s+Else\\s+LoadController\\(\"VPM\"\\)\\s+End If",
+     "LoadVPM \"02800000\", \"WPC.VBS\", 3.52", true,
+     "Cactus Canyon TTNZ: load VPM through the bundled controller.vbs (custom LoadVBSFiles/LoadController signatures)" },
+   { "Cactus Canyon Continued _TTNZ  v2.0.vpx",
+     "LoadVBSFiles \"02800000\", \"WPC\\.VBS\", 3\\.52\\s+If PROC = 1 Then\\s+LoadController\\(\"PROC\"\\)\\s+Else\\s+LoadController\\(\"VPM\"\\)\\s+End If",
+     "LoadVPM \"02800000\", \"WPC.VBS\", 3.52", true,
+     "Cactus Canyon Continued TTNZ: load VPM through the bundled controller.vbs (custom LoadVBSFiles/LoadController signatures)" },
+   // The Continued build ships set for P-ROC hardware (PROC = 1), which has no Android
+   // counterpart; the table's own PROC = 0 mode runs the cc_13 ROM through VPinMAME.
+   { "Cactus Canyon Continued _TTNZ  v2.0.vpx", "Const PROC = 1", "Const PROC = 0", false,
+     "Cactus Canyon Continued TTNZ: use the table's VPinMAME mode instead of P-ROC hardware" },
+   // Ramones (both builds): a typo, '.' for ',' between PlaySoundAt's arguments. Windows
+   // compiles the line and would only fail if it ran; Wine's grammar rejects it at compile
+   // time (1005), so the table cannot start (cluster O, 7 reports; wine_harness case o_*).
+   { "Ramones (HauntFreaks 2021).vpx", "PlaySoundAt \"flip_hit_1\". Rubber32", "PlaySoundAt \"flip_hit_1\", Rubber32", false,
+     "Ramones: fix the '.' typo between PlaySoundAt arguments (Wine compile error 1005)" },
+   { "Ramones (HauntFreaks 2021) v2.0.vpx", "PlaySoundAt \"flip_hit_1\". Rubber32", "PlaySoundAt \"flip_hit_1\", Rubber32", false,
+     "Ramones v2.0: fix the '.' typo between PlaySoundAt arguments (Wine compile error 1005)" },
+   // rpdr: Include("../scripts/core.vbs") reads core.vbs from a Scripts folder next to the
+   // Tables folder, the Windows VPX layout. On the device the VPM scripts live inside the app,
+   // so OpenTextFile failed (E_FAIL) in global code. GetTextFile serves the bundled core.vbs.
+   { "rpdr.vpx", "Include(\"../scripts/core.vbs\")", "ExecuteGlobal GetTextFile(\"core.vbs\")", false,
+     "rpdr: load core.vbs from the app's bundled scripts instead of ../scripts/" },
 };
 const size_t kTablePatchCount = sizeof(kTablePatches) / sizeof(kTablePatches[0]);
 
