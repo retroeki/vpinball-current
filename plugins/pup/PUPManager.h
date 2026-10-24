@@ -102,7 +102,7 @@ private:
    void UnloadFonts();
    void LoadFonts();
    void LoadPlaylists();
-   void DetermineScoreViewScreen();
+   void DetermineScoreViewScreen(const string& szRomName);
    void Start();
    void Stop();
 

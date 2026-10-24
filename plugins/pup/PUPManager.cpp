@@ -169,15 +169,26 @@ void PUPManager::LoadConfig(const string& szRomName)
    }
 
    // Determine which screen to use for scoreview
-   DetermineScoreViewScreen();
+   DetermineScoreViewScreen(szRomName);
 
    // Queue initial event
    LOGI("Queueing initial D0 trigger");
    QueueTriggerData({ 'D', 0, 1 });
 }
 
-void PUPManager::DetermineScoreViewScreen()
+void PUPManager::DetermineScoreViewScreen(const string& szRomName)
 {
+   // Packs that draw the score on the backglass while screen 1 only plays its own video.
+   // hpgof (Harry Potter Goblet of Fire): every score label is on screen 2, inside the
+   // PuPOverlays frame; the table never switches its PuPDMD to the score page.
+   static const string kBackglassScorePacks[] = { "hpgof"s };
+   auto backglass = GetScreen(PUP_SCREEN_BACKGLASS);
+   if (backglass && std::ranges::any_of(kBackglassScorePacks, [&szRomName](const string& pack) { return StrCompareNoCase(szRomName, pack); })) {
+      m_scoreViewScreenNum = PUP_SCREEN_BACKGLASS;
+      LOGI("ScoreView screen: %d (%s) - score drawn on the backglass by this pack", m_scoreViewScreenNum, backglass->GetScreenDes().c_str());
+      return;
+   }
+
    // Screen 1 (DMD) is the primary scoreview screen if active
    auto screen1 = GetScreen(PUP_SCREEN_DMD);
    if (screen1 && screen1->GetMode() != PUPScreen::Mode::Off && screen1->GetMode() != PUPScreen::Mode::MusicOnly) {
