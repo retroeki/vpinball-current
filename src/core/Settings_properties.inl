@@ -1372,6 +1372,7 @@ PropEnumWithMin(Standalone, RenderingModeOverride, "Override rendering mode"s, "
 PropBool(Standalone, Haptics, "Haptics"s, ""s, g_isMobile);
 PropBool(Standalone, TouchZonesForced, "Force Touch Zones"s, "Always use hardcoded touch zones, ignoring table overrides"s, false);
 PropBool(Standalone, TouchOneHandedFlippers, "One-Handed Flippers"s, "Either flipper touch zone fires all flippers (left and right, staged included) so tables can be played with one hand"s, false);
+PropBool(Standalone, TouchReverseNudge, "Reverse Touch Nudging"s, "Swap the left and right nudge touch zones, so the thumb that is not holding a flipper does the nudging"s, false);
 PropInt(Standalone, TouchLayoutPreset, "Touch Layout Preset"s, "Arrangement of the on-screen touch zones. 0 = standard; 1 = Start/Action/Launch Ball moved up under the credit row so the area below the flippers is dead; 2 = as 1, with the centre nudge moved into the nudge row and the flippers widened to half the screen each; 3 = bottom action strip kept, the three nudges in a row of the same height above it, and double-height half-width flippers"s, 0, 3, 0);
 PropBool(Standalone, EmCreditDualSend, "EM Credit Dual-Send"s, "Also deliver the legacy '5' coin key on Add Credit, for EM/original tables that hard-code the '5' credit key instead of '3'. Host sets this for non-PinMAME tables only."s, false);
 PropBool(Standalone, ResetLogOnPlay, "Reset Log on Play"s, ""s, g_isMobile);

@@ -74,6 +74,11 @@ InputManager::InputManager()
       // Any change here must be mirrored in the host's legend replica
       // (VPinballTouchControlsView.kt), which draws these same rects.
       const int layoutPreset = clamp(settings.GetStandalone_TouchLayoutPreset(), 0, 3);
+      // Reverse touch nudging: the left-side nudge zone fires a right nudge and vice versa. A player
+      // holding the left flipper wants to nudge left, but that thumb is busy while the right one is free.
+      const bool reverseNudge = settings.GetStandalone_TouchReverseNudge();
+      const unsigned int leftNudgeActionId = reverseNudge ? GetRightNudgeActionId() : GetLeftNudgeActionId();
+      const unsigned int rightNudgeActionId = reverseNudge ? GetLeftNudgeActionId() : GetRightNudgeActionId();
       // Flipper rects differ per preset and are reused by the one-handed registrations below.
       RECT leftFlipperRect { 0, 60, 30, 90 };
       RECT rightFlipperRect { 70, 60, 100, 90 };
@@ -92,8 +97,8 @@ InputManager::InputManager()
          // Standard: action row along the bottom edge, flippers 30% wide either side of the centre nudge.
          addTouchRegion(RECT { 0, 10, 50, 30 }, GetLeftMagnaActionId());
          addTouchRegion(RECT { 50, 10, 100, 30 }, GetRightMagnaActionId());
-         addTouchRegion(RECT { 0, 30, 50, 60 }, GetLeftNudgeActionId());
-         addTouchRegion(RECT { 50, 30, 100, 60 }, GetRightNudgeActionId());
+         addTouchRegion(RECT { 0, 30, 50, 60 }, leftNudgeActionId);
+         addTouchRegion(RECT { 50, 30, 100, 60 }, rightNudgeActionId);
          addTouchRegion(RECT { 30, 60, 70, 90 }, GetCenterNudgeActionId());
          addTouchRegion(RECT { 0, 90, 30, 100 }, GetStartActionId());
          // Centre-bottom action/lockbar button (engine action "Lockbar", script LockbarKey), sits between Start and Launch.
@@ -109,9 +114,9 @@ InputManager::InputManager()
          // Magna gives up half its row to make space for the taller flippers.
          addTouchRegion(RECT { 0, 10, 50, 20 }, GetLeftMagnaActionId());
          addTouchRegion(RECT { 50, 10, 100, 20 }, GetRightMagnaActionId());
-         addTouchRegion(RECT { 0, 80, 33, 90 }, GetLeftNudgeActionId());
+         addTouchRegion(RECT { 0, 80, 33, 90 }, leftNudgeActionId);
          addTouchRegion(RECT { 33, 80, 67, 90 }, GetCenterNudgeActionId());
-         addTouchRegion(RECT { 67, 80, 100, 90 }, GetRightNudgeActionId());
+         addTouchRegion(RECT { 67, 80, 100, 90 }, rightNudgeActionId);
          addTouchRegion(RECT { 0, 90, 30, 100 }, GetStartActionId());
          addTouchRegion(RECT { 30, 90, 70, 100 }, GetLockbarActionId());
          addTouchRegion(RECT { 70, 90, 100, 100 }, GetLaunchBallActionId());
@@ -129,8 +134,8 @@ InputManager::InputManager()
          addTouchRegion(RECT { 50, 20, 100, 40 }, GetRightMagnaActionId());
          if (layoutPreset == 1)
          {
-            addTouchRegion(RECT { 0, 40, 50, 60 }, GetLeftNudgeActionId());
-            addTouchRegion(RECT { 50, 40, 100, 60 }, GetRightNudgeActionId());
+            addTouchRegion(RECT { 0, 40, 50, 60 }, leftNudgeActionId);
+            addTouchRegion(RECT { 50, 40, 100, 60 }, rightNudgeActionId);
             addTouchRegion(RECT { 30, 60, 70, 100 }, GetCenterNudgeActionId());
             leftFlipperRect = RECT { 0, 60, 30, 100 };
             rightFlipperRect = RECT { 70, 60, 100, 100 };
@@ -138,9 +143,9 @@ InputManager::InputManager()
          else
          {
             // Preset 2: centre nudge joins the nudge row, so the flippers split the bottom 40% in half.
-            addTouchRegion(RECT { 0, 40, 33, 60 }, GetLeftNudgeActionId());
+            addTouchRegion(RECT { 0, 40, 33, 60 }, leftNudgeActionId);
             addTouchRegion(RECT { 33, 40, 67, 60 }, GetCenterNudgeActionId());
-            addTouchRegion(RECT { 67, 40, 100, 60 }, GetRightNudgeActionId());
+            addTouchRegion(RECT { 67, 40, 100, 60 }, rightNudgeActionId);
             leftFlipperRect = RECT { 0, 60, 50, 100 };
             rightFlipperRect = RECT { 50, 60, 100, 100 };
          }
@@ -164,7 +169,7 @@ InputManager::InputManager()
          addTouchRegion(rightFlipperRect, GetStagedLeftFlipperActionId());
       }
       PLOGI << "Registered " << m_touchRegionMap.size() << " touch zones (forced=" << touchZonesForced << " preset=" << layoutPreset
-            << " oneHandedFlippers=" << oneHandedFlippers << ')';
+            << " oneHandedFlippers=" << oneHandedFlippers << " reverseNudge=" << reverseNudge << ')';
    }
    m_touchRegionHold.assign(m_touchRegionMap.size(), 0);
 
