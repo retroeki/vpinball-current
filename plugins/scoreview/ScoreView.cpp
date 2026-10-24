@@ -1,6 +1,7 @@
 // license:GPLv3+
 
 #include "ScoreView.h"
+#include "ScoreViewLayoutChoice.h"
 
 #include "plugins/ControllerPlugin.h"
 
@@ -498,155 +499,125 @@ void ScoreView::Select(const float scoreW, const float scoreH)
    const bool selDbg = (s_selDbg > 0);
    if (selDbg) { --s_selDbg; LOGI("ScoreView::Select: output=%.0fx%.0f AR=%.2f layouts=%d", scoreW, scoreH, rtAR, (int)m_layouts.size()); }
 
-   // Evaluate layouts against current context
+   // A layout generated for the previous source set is rebuilt from the current one
+   std::erase_if(m_layouts, [](const Layout& l) { return l.generated; });
+   if (m_layouts.empty())
+      return;
+
+   // Evaluate layouts against current context (ScoreViewLayoutChoice.h)
    ResURIResolver::SegDisplayState segDisplay;
    ResURIResolver::DisplayState display;
+   std::vector<LayoutChoice::Score> scores;
+   scores.reserve(m_layouts.size());
    for (auto& layout : m_layouts)
    {
-      const float layoutAR = layout.width / layout.height;
-      layout.unfittedPixels = (rtAR > layoutAR) ? (layoutAR / rtAR) : (rtAR / layoutAR);
-      layout.matchedVisuals = 0;
-      layout.unmatchedVisuals = 0;
-      layout.reelOnly = !layout.visuals.empty();
+      LayoutChoice::Score score = LayoutChoice::Start(!layout.visuals.empty(), rtAR, layout.width / layout.height);
       for (const auto& visual : layout.visuals)
       {
          switch (visual.type)
          {
          case VisualType::DMD:
-            layout.reelOnly = false;
             display = m_resURIResolver.GetDisplayState(visual.srcUri);
             if (selDbg) LOGI("ScoreView::Select:   [%.0fx%.0f] DMD '%s' want %dx%d -> %s", // [SEG-DIAG]
                layout.width, layout.height, visual.srcUri.c_str(), visual.dmdSize.x, visual.dmdSize.y,
                display.source == nullptr ? "no source" : "source present");
-            if (display.source == nullptr
-               // Synthetic seg-to-DMD sources (AlphaDMD, published for external
-               // DMD mirroring) must never satisfy an in-app DMD visual: the
-               // segment layouts render the real thing. Without this check the
-               // 128x32 synthetic source AR-matches the bundled DMD layouts and
-               // their +10 weight would beat the segment layouts.
-               // Scoped to default-source visuals: a per-table layout that names
-               // the plugin explicitly (e.g. ctrl://alphadmd/display, Dark Chaos)
-               // is a deliberate opt-in to the synthetic render. All bundled
-               // layouts use ctrl://default/..., so ROM tables are unchanged.
-               || (((display.source->hardware & CTLPI_DISPLAY_HARDWARE_FAMILY_MASK) == CTLPI_DISPLAY_HARDWARE_SEG_RENDER)
-                   && (visual.srcUri.rfind("ctrl://default/", 0) == 0)))
-            {
-               layout.unmatchedVisuals++;
-               // LOGI("ScoreView::Select: layout %.0fx%.0f visual DMD '%s' dmdSize=%dx%d -> source=NULL (unmatched)",
-               //    layout.width, layout.height, visual.srcUri.c_str(), visual.dmdSize.x, visual.dmdSize.y);
-            }
-            else if (display.source->width * visual.dmdSize.y != visual.dmdSize.x * display.source->height)
-            {
-               layout.unmatchedVisuals++;
-               // LOGI("ScoreView::Select: layout %.0fx%.0f visual DMD '%s' dmdSize=%dx%d -> source=%ux%u (AR mismatch: %u*%d != %d*%u)",
-               //    layout.width, layout.height, visual.srcUri.c_str(), visual.dmdSize.x, visual.dmdSize.y,
-               //    display.source->width, display.source->height,
-               //    display.source->width, visual.dmdSize.y, visual.dmdSize.x, display.source->height);
-            }
-            else
-            {
-               layout.matchedVisuals += 10; // To favor DMD over alphanumeric seg displays
-               // LOGI("ScoreView::Select: layout %.0fx%.0f visual DMD '%s' dmdSize=%dx%d -> source=%ux%u (MATCHED)",
-               //    layout.width, layout.height, visual.srcUri.c_str(), visual.dmdSize.x, visual.dmdSize.y,
-               //    display.source->width, display.source->height);
-            }
+            // Synthetic seg-to-DMD sources (AlphaDMD, published for external DMD mirroring)
+            // must never satisfy an in-app DMD visual: the segment layouts render the real
+            // thing. Scoped to default-source visuals: a per-table layout that names the
+            // plugin explicitly (e.g. ctrl://alphadmd/display, Dark Chaos) is a deliberate
+            // opt-in to the synthetic render.
+            LayoutChoice::AddDmd(score, display.source != nullptr,
+               display.source != nullptr && ((display.source->hardware & CTLPI_DISPLAY_HARDWARE_FAMILY_MASK) == CTLPI_DISPLAY_HARDWARE_SEG_RENDER)
+                  && (visual.srcUri.rfind("ctrl://default/", 0) == 0),
+               display.source ? display.source->width : 0, display.source ? display.source->height : 0, visual.dmdSize.x, visual.dmdSize.y);
             break;
          case VisualType::SegDisplay:
-            layout.reelOnly = false;
             segDisplay = m_resURIResolver.GetSegDisplayState(visual.srcUri);
-            if ((segDisplay.source == nullptr) || (segDisplay.source->nElements != visual.nElements))
-            {
-               layout.unmatchedVisuals++;
-               if (selDbg) LOGI("ScoreView::Select:   [%.0fx%.0f] SEG '%s' want nEl=%d -> UNMATCHED (%s, src nEl=%d)", // [SEG-DIAG]
-                  layout.width, layout.height, visual.srcUri.c_str(), visual.nElements,
-                  segDisplay.source == nullptr ? "no source" : "count mismatch",
-                  segDisplay.source == nullptr ? -1 : (int)segDisplay.source->nElements);
-            }
-            else
-            {
-               layout.matchedVisuals++;
-               if (selDbg) LOGI("ScoreView::Select:   [%.0fx%.0f] SEG '%s' want nEl=%d -> MATCH (src nEl=%d)", // [SEG-DIAG]
-                  layout.width, layout.height, visual.srcUri.c_str(), visual.nElements, (int)segDisplay.source->nElements);
-            }
+            if (selDbg) LOGI("ScoreView::Select:   [%.0fx%.0f] SEG '%s' want nEl=%d -> src nEl=%d", // [SEG-DIAG]
+               layout.width, layout.height, visual.srcUri.c_str(), visual.nElements,
+               segDisplay.source == nullptr ? -1 : (int)segDisplay.source->nElements);
+            LayoutChoice::AddSeg(score, segDisplay.source != nullptr, segDisplay.source ? (int)segDisplay.source->nElements : 0, visual.nElements);
             break;
          case VisualType::Image:
-            // The only Image source today is the live EM score-reel channel.
-            // It is "available" iff ReelDmd is currently pushing a composited
-            // reel image (reel tables). On non-reel tables GetReelImage returns
-            // false, so the reel layout becomes unmatched -> disabled, and the
-            // bundled DMD/seg layouts win exactly as before.
-            //
-            // Weight a reel match at the LOWEST priority (+1, vs DMD +10): a real
-            // PinMAME DMD or segment display is always the authoritative score, so
-            // the reel layout must only win on true EM tables where nothing else
-            // matches. Otherwise a DMD/SS table that also carries a decorative
-            // credit/status DispReel would tie the DMD layout and the reel "asset"
-            // could replace its DMD.
-            if (GetReelImage(nullptr, nullptr, nullptr, nullptr))
-               layout.matchedVisuals += 1;
-            else
-               layout.unmatchedVisuals++;
+            // The only Image source today is the live EM score-reel channel, "available"
+            // iff ReelDmd is pushing a composited reel image. Lowest priority: a real
+            // PinMAME DMD or segment display is the authoritative score.
+            LayoutChoice::AddImage(score, GetReelImage(nullptr, nullptr, nullptr, nullptr));
             break;
          }
       }
+      layout.matchedVisuals = score.matched;
+      layout.unmatchedVisuals = score.unmatched;
+      layout.unfittedPixels = score.unfitted;
+      layout.reelOnly = score.reelOnly;
+      scores.push_back(score);
       if (selDbg) LOGI("ScoreView::Select: layout %.0fx%.0f visuals=%d matched=%d unmatched=%d reelOnly=%d unfitted=%.3f", // [SEG-DIAG]
          layout.width, layout.height, (int)layout.visuals.size(), layout.matchedVisuals, layout.unmatchedVisuals,
          layout.reelOnly ? 1 : 0, layout.unfittedPixels);
    }
 
-   // Select the best matching layout:
-   // - without missing visual sources
-   // - with a maximum of satisfied visuals
-   // - with displays size matching visuals (16 alphanum vs 20 alphanum, 128x32,...)
-   // - with the best matching layout aspect ratio
-   m_bestLayout = &*std::max_element(m_layouts.begin(), m_layouts.end(),
-      [](const Layout& a, const Layout& b) -> bool
-      {
-         if (a.unmatchedVisuals != b.unmatchedVisuals) // The least unmatched visuals
-            return a.unmatchedVisuals > b.unmatchedVisuals;
-         if (a.matchedVisuals != b.matchedVisuals) // The maximum matched visual
-            return a.matchedVisuals < b.matchedVisuals;
-         if (a.unfittedPixels != b.unfittedPixels) // The one fitting the output better
-            return a.unfittedPixels < b.unfittedPixels;
-         return false;
-      });
+   // The least unmatched visuals, the most matched, the best aspect fit; the reel image only
+   // when no display layout fits; nothing when the winner still misses a source.
+   const int picked = LayoutChoice::Pick(scores);
 
-   // The live EM reel image is a LAST-RESORT source. A real PinMAME DMD/segment
-   // display (a fully-matched non-reel layout) must always win over it, so a
-   // solid-state table whose score is on a segment display (e.g. Ali) is not
-   // hijacked by its decorative per-character DispReels, which ReelDmd now also
-   // composites into the reel channel. If the winner is reel-only but a fully
-   // matched real display exists, prefer that.
-   bool reelDemotionFired = false; // [SEG-DIAG]
-   if (m_bestLayout->reelOnly)
+   // No bundled layout fits the ROM's segment displays: lay out what it publishes
+   std::vector<int> segElements;
+   for (int id = 0; id < 64; id++)
    {
-      Layout* real = nullptr;
-      for (auto& l : m_layouts)
-         if (!l.reelOnly && l.unmatchedVisuals == 0
-             && (real == nullptr || l.matchedVisuals > real->matchedVisuals
-                 || (l.matchedVisuals == real->matchedVisuals && l.unfittedPixels < real->unfittedPixels)))
-            real = &l;
-      if (real != nullptr)
+      segDisplay = m_resURIResolver.GetSegDisplayState("ctrl://default/seg?id=" + std::to_string(id));
+      if (segDisplay.source == nullptr)
+         break;
+      segElements.push_back((int)segDisplay.source->nElements);
+   }
+   display = m_resURIResolver.GetDisplayState("ctrl://default/display");
+   const bool realDmd = display.source != nullptr && ((display.source->hardware & CTLPI_DISPLAY_HARDWARE_FAMILY_MASK) != CTLPI_DISPLAY_HARDWARE_SEG_RENDER);
+   if (LayoutChoice::NeedsGenerated(scores, picked, segElements.size(), realDmd))
+   {
+      const LayoutChoice::Generated gen = LayoutChoice::Generate(segElements);
+      Layout layout { m_layouts.front().path }; // its folder holds the glass image
+      layout.width = gen.width;
+      layout.height = gen.height;
+      layout.fit = ScoreView::Contain;
+      layout.generated = true;
+      for (const LayoutChoice::Segment& seg : gen.segments)
       {
-         m_bestLayout = real;
-         reelDemotionFired = true; // [SEG-DIAG]
+         Visual visual { VisualType::SegDisplay };
+         visual.x = seg.x;
+         visual.y = gen.height - seg.y - seg.h; // layout files are y down, visuals y up (see Parse)
+         visual.w = seg.w;
+         visual.h = seg.h;
+         visual.srcUri = "ctrl://default/seg?id=" + std::to_string(seg.srcId);
+         visual.liveStyle = -1;
+         visual.tint = vec3(1.f, 1.f, 1.f);
+         visual.glassTint = vec3(1.f, 1.f, 1.f);
+         visual.glassRoughness = 0.1f;
+         visual.glassPath = "./Glass-Dirty-1.webp";
+         visual.glassAmbient = vec3(InvsRGB(0.125f), InvsRGB(0.125f), InvsRGB(0.125f));
+         visual.glassPad = vec4(0.f, 0.f, 0.f, 0.f);
+         visual.glassArea = vec4(0.f, 0.f, 0.f, 0.f);
+         visual.segFamilyHint = VPXSegDisplayHint::Generic;
+         visual.nElements = seg.nElements;
+         visual.xOffsets = seg.xOffsets;
+         layout.visuals.push_back(visual);
       }
+      layout.matchedVisuals = static_cast<unsigned int>(layout.visuals.size());
+      layout.unmatchedVisuals = 0;
+      layout.unfittedPixels = 1.f;
+      layout.reelOnly = false;
+      m_layouts.push_back(layout);
+      m_bestLayout = &m_layouts.back();
+      LOGI("ScoreView: no layout fits the %d segment displays, generated %.0fx%.0f", (int)segElements.size(), layout.width, layout.height);
+      return;
    }
-   if (selDbg) LOGI("ScoreView::Select: CHOSEN %.0fx%.0f matched=%d unmatched=%d reelOnly=%d reelDemotion=%s", // [SEG-DIAG]
-      m_bestLayout->width, m_bestLayout->height, m_bestLayout->matchedVisuals, m_bestLayout->unmatchedVisuals,
-      m_bestLayout->reelOnly ? 1 : 0, reelDemotionFired ? "fired" : "no");
 
-   if (m_bestLayout->unmatchedVisuals > 0)
+   if (picked < 0)
    {
-      SVLOG_W("ScoreView::Select: Best layout %.0fx%.0f has %d unmatched visuals, disabling ScoreView render",
-         m_bestLayout->width, m_bestLayout->height, m_bestLayout->unmatchedVisuals);
-      m_bestLayout = nullptr;
+      SVLOG_W("ScoreView::Select: No layout without unmatched visuals, disabling ScoreView render");
+      return;
    }
-   else
-   {
-      // LOGI("ScoreView::Select: Selected layout %.0fx%.0f (matched=%d)",
-      //    m_bestLayout->width, m_bestLayout->height, m_bestLayout->matchedVisuals);
-   }
+   m_bestLayout = &m_layouts[picked];
+   if (selDbg) LOGI("ScoreView::Select: CHOSEN %.0fx%.0f matched=%d unmatched=%d reelOnly=%d", // [SEG-DIAG]
+      m_bestLayout->width, m_bestLayout->height, m_bestLayout->matchedVisuals, m_bestLayout->unmatchedVisuals, m_bestLayout->reelOnly ? 1 : 0);
 }
 
 bool ScoreView::Render(VPXRenderContext2D* ctx)

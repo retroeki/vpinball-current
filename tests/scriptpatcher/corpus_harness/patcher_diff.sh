@@ -33,7 +33,7 @@ cmake --build "$WORK/build_new" --target patch_corpus -j"$(nproc)" > /dev/null 2
 
 status=0
 for RAW in "${RAWS[@]}"; do
-   name="$(basename "$RAW")"
+   name="$(basename "$(dirname "$RAW")")_$(basename "$RAW")"
    echo
    echo "=== $RAW ==="
    rm -rf "$WORK/$name.base" "$WORK/$name.new"

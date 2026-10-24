@@ -1,0 +1,4 @@
+# Options whose phone default the rule changes (script name<TAB>option name).
+# Corpora: G:\VPX Files (2026-10-23), Visual Pinball (2026-01-02) zips, requested tables, JP's Foo Fighters beta.
+Burner (original 2026) v1.01	DMD Type
+JP's Foo Fighters beta	DMD Type

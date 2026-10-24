@@ -20,6 +20,7 @@
 #include "ThreadPool.h"
 #include "core/VPXPluginAPIImpl.h"
 #include "core/ScriptGlobalTable.h"
+#include "core/TableOptionDefault.h"
 
 #include "utils/ushock_output.h"
 #include "ui/paintsur.h"
@@ -7833,6 +7834,11 @@ std::optional<VPX::Properties::PropertyRegistry::PropId> PinTable::RegisterOptio
    }
 
    const bool isPercent = unit == 1;
+#if defined(__ANDROID__)
+   // A "Desktop DMD" default draws off screen on a phone; FlexDMD shows in the ScoreView
+   if (!literals.empty())
+      defaultValue = static_cast<float>(TableOptionDefault::ForPhone(literals, static_cast<int>(minValue), static_cast<int>(defaultValue)));
+#endif
    if (!literals.empty())
    {
       // Detect & implement On/Off, True/False, Hide/Show as a toggle

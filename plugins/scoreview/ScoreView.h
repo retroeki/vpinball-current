@@ -119,6 +119,7 @@ private:
       unsigned int matchedVisuals;
       float unfittedPixels;
       bool reelOnly = false; // every visual is the live EM reel image (no DMD/segment source)
+      bool generated = false; // built by Select from the ROM's segment displays (ScoreViewLayoutChoice.h)
    };
 
    vector<Layout> m_layouts;
