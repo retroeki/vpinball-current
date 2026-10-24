@@ -242,6 +242,26 @@ int main(int argc, char** argv)
       CHECK(Pick(scores) < 0 && !NeedsGenerated(scores, Pick(scores), 0, false), "no sources: panel off");
    }
 
+   // Dots or a plain image for DMD frames, at the panel widths ScoreViewBoxSizer gives a 4:1
+   // display: size levels 1..4 on the 1080x2640 Balanced phone (810 render px) and on a
+   // 1600 px tablet at the same preset (1200 render px).
+   {
+      const float phone[4] = { 256.f, 384.f, 512.f, 640.f };
+      const float tablet[4] = { 379.f, 569.f, 758.f, 948.f };
+      for (int level = 0; level < 4; level++)
+         for (const float* widths : { phone, tablet })
+         {
+            const float w = widths[level];
+            CHECK(!DrawSmooth(false, w, 128) && !DrawSmooth(false, w, 192) && !DrawSmooth(false, w, 256), "mono DMD keeps its dots at %.0f px", w);
+            CHECK(DrawSmooth(true, w, 256) == (w / 256.f < 3.f), "colour 256x64 at %.0f px: smooth below 3 px per dot", w);
+            CHECK(DrawSmooth(true, w, 128) == (w / 128.f < 3.f), "colour 128x32 at %.0f px: smooth below 3 px per dot", w);
+         }
+      CHECK(DrawSmooth(true, 512.f, 256) && !DrawSmooth(true, 512.f, 128), "default phone panel: JP's 256x64 FlexDMD smooth, 128x32 dotted");
+      CHECK(DrawSmooth(true, 256.f, 128), "smallest phone panel: colour 128x32 smooth (2 px per dot)");
+      CHECK(!DrawSmooth(true, 948.f, 256), "largest tablet panel: colour 256x64 keeps dots (3.7 px per dot)");
+      CHECK(!DrawSmooth(true, 512.f, 0), "no frame width: dots");
+   }
+
    printf("%d segment ROMs: %d keep their layout, %d get a generated one (%d checks)\n", roms, kept, generated, g_checks);
    for (const auto& [sig, n] : generatedBySignature)
       if (n >= 3)

@@ -204,4 +204,16 @@ inline Generated Generate(const std::vector<int>& nElements)
    return g;
 }
 
+// Below this many screen pixels per dot, the dot grid eats thin strokes.
+constexpr float kMinDotPixels = 3.f;
+
+// Whether a DMD frame is drawn as a plain image rather than as dots: full-colour frames
+// (FlexDMD/UltraDMD artwork, colorized ROMs) whose dots would be under kMinDotPixels on
+// screen, like JP's 256x64 FlexDMD song cards in a phone-sized panel. Monochrome DMDs keep
+// their dots at any size.
+inline bool DrawSmooth(bool colourFrame, float screenWidth, unsigned int frameWidth)
+{
+   return colourFrame && frameWidth > 0 && screenWidth / static_cast<float>(frameWidth) < kMinDotPixels;
+}
+
 }

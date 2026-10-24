@@ -697,6 +697,16 @@ bool ScoreView::Render(VPXRenderContext2D* ctx)
             : dmd.source->frameFormat == CTLPI_DISPLAY_FORMAT_SRGB565 ? VPXTextureFormat::VPXTEXFMT_sRGB565
                                                                       : VPXTextureFormat::VPXTEXFMT_sRGB8,
             dmd.state.frame);
+         // Colour frames too fine for their dots on this screen are drawn as a plain image
+         if (LayoutChoice::DrawSmooth(dmd.source->frameFormat != CTLPI_DISPLAY_FORMAT_LUM32F, visual.w * ctx->outWidth / ctx->srcWidth, dmd.source->width))
+         {
+            // DrawImage measures y from the other edge than DrawDisplay (Renderer::DrawMatrixDisplay)
+            ctx->DrawImage(ctx, visual.dmdTex, visual.tint.x, visual.tint.y, visual.tint.z, 1.f,
+               0.f, 0.f, static_cast<float>(dmd.source->width), static_cast<float>(dmd.source->height), // whole frame
+               0.f, 0.f, 0.f, // no rotation
+               px + visual.x, ctx->srcHeight - (py + visual.y) - visual.h, visual.w, visual.h);
+            break;
+         }
          vec4 glassArea;
          if (visual.glass == nullptr || visual.glassArea.z == 0.f || visual.glassArea.w == 0.f)
             glassArea = vec4(0.f, 0.f, 1.f, 1.f);
