@@ -89,6 +89,9 @@
  *       Windows VBScript correctly parses (a*b)+c as a single expression argument.
  *       Fix (PatchAmbiguousCallParens): Wrap in extra parens:
  *         AddScore (a*b)+c → AddScore ((a*b)+c)
+ *       DISABLED 2026-10-24: parser.y's SubFirstArg rule handles this in the engine
+ *       (with operator precedence since then); the rule also rewrote expressions
+ *       and strings. See the PatchScript call site.
  *       GOTCHAS:
  *         - Must trim \r before detecting end of expression (CRLF line endings)
  *         - Must exclude VBScript keywords (if, while, and, or, not, etc.) from
@@ -1242,11 +1245,14 @@ std::string SimpleScriptPatcher::PatchControllerPause(const std::string& script)
     // "Description unavailable"). Convert to a multi-line Sub with a comment
     // body instead, which every VBScript parser accepts. Observed in Medieval
     // Madness Bigus MOD 3.0 Table1_Paused / Table1_unPaused.
+    // Anchored at the start of a line: an author's commented-out
+    // `'Sub table1_Paused:Controller.Pause = 1:End Sub` used to be split onto three
+    // lines, leaving a live `End Sub` (Flash Gordon, Alien Covenant, Big Town: 1002).
     static const RE2 pSubOnlyPause(
-        R"((?i)(Sub\s+\w+(?:\s*\([^)]*\))?)\s*:\s*Controller\.Pause\s*=\s*(?:True|False|1|0)\s*:\s*(End\s+Sub))"
+        R"((?i)((?:^|[\r\n])[ \t]*(?:(?:Public|Private)[ \t]+)?)(Sub\s+\w+(?:\s*\([^)]*\))?)\s*:\s*Controller\.Pause\s*=\s*(?:True|False|1|0)\s*:\s*(End\s+Sub))"
     );
     std::string before = r;
-    r = RE2Replace(r, pSubOnlyPause, "\\1\r\n\t' Controller.Pause disabled for Android\r\n\\2");
+    r = RE2Replace(r, pSubOnlyPause, "\\1\\2\r\n\t' Controller.Pause disabled for Android\r\n\\3");
     if (r != before) count++;
 
     // General case: colon-separated Controller.Pause in a sub with OTHER body.
@@ -1292,6 +1298,45 @@ std::string SimpleScriptPatcher::PatchControllerPause(const std::string& script)
     r = RE2Replace(r, p3b, "\\1Exit Sub ' Controller.Stop disabled for Android");
     if (r != before) count++;
 
+    // pPauseIf and p3b emit `Exit Sub`; inside a Function or Property that is a
+    // compile error (1039, Bow And Arrow: `Case 64: If IsObject(vpmShowDips) Then
+    // Controller.Pause = True` in Function vpmKeyUp). Use the matching Exit there.
+    if (r.find("Exit Sub ' Controller.") != std::string::npos) {
+        static const RE2 procStart(R"((?i)^[ \t]*(?:(?:Public|Private)[ \t]+)?(?:Default[ \t]+)?(Sub|Function|Property)\b)");
+        static const RE2 procEnd(R"((?i)\bEnd[ \t]+(?:Sub|Function|Property)\b)");
+        std::string out;
+        out.reserve(r.size() + 64);
+        std::string kind;
+        size_t pos = 0;
+        while (pos < r.size()) {
+            // VBScript ends a line at CR, LF or CRLF.
+            size_t eol = r.find_first_of("\r\n", pos);
+            if (eol == std::string::npos) eol = r.size();
+            else eol += (r[eol] == '\r' && eol + 1 < r.size() && r[eol + 1] == '\n') ? 2 : 1;
+            std::string line = r.substr(pos, eol - pos);
+            std::string opened;
+            if (RE2::PartialMatch(line, procStart, &opened)) {
+                for (auto& c : opened) c = (char)tolower((unsigned char)c);
+                kind = opened;
+            }
+            if (kind == "function" || kind == "property") {
+                const std::string exitKw = kind == "function" ? "Exit Function" : "Exit Property";
+                for (const char* marker : { "Exit Sub ' Controller.Pause disabled for Android", "Exit Sub ' Controller.Stop disabled for Android" }) {
+                    size_t at = line.find(marker);
+                    if (at != std::string::npos) {
+                        line.replace(at, 8, exitKw);
+                        count++;
+                    }
+                }
+            }
+            if (RE2::PartialMatch(line, procEnd))
+                kind.clear();
+            out += line;
+            pos = eol;
+        }
+        r.swap(out);
+    }
+
     // Handle Controller.Stop on its own line
     static const RE2 p4(R"((?i)(^[ \t]*)(Controller\.Stop)[ \t]*$)");
     before = r;
@@ -1332,6 +1377,26 @@ std::string SimpleScriptPatcher::PatchPinUpPlayerFileAccess(const std::string& s
     std::string before = r;
     r = RE2Replace(r, p3, "\\1\"1\" ' Default for Android (was ObjFile.ReadLine)");
     if (r != before) count++;
+
+    // Same read with the variables declared earlier (BTILC, Blizzard of Ozz,
+    // Terrifier): Set ObjFile = ObjFso.OpenTextFile(pupPackScreenFile) then
+    // DMDType = ObjFile.ReadLine or DMDType = CInt(ObjFile.ReadLine). Limited to
+    // the pupPackScreenFile idiom; the ObjFso line stays (creating it is harmless).
+    static const RE2 p2v(R"((?i)(^|\n)([ \t]*)(Set\s+ObjFile\s*=\s*ObjFso\.OpenTextFile\s*\(\s*pupPackScreenFile\s*\)))");
+    int screenFileReads = 0;
+    r = RE2ReplaceWithCallback(r, p2v, [&screenFileReads](const RE2Match& m) -> std::string {
+        screenFileReads++;
+        return std::string(m[1]) + std::string(m[2]) + "' " + std::string(m[3]) + " ' Disabled for Android";
+    });
+    if (screenFileReads > 0) {
+        count += screenFileReads;
+        static const RE2 p3v(R"((?i)(^|\n)([ \t]*DMDType\s*=\s*)(CInt\s*\(\s*ObjFile\.ReadLine\s*\)|ObjFile\.ReadLine))");
+        r = RE2ReplaceWithCallback(r, p3v, [&count](const RE2Match& m) -> std::string {
+            count++;
+            const bool numeric = std::string(m[3]).find('(') != std::string::npos;
+            return std::string(m[1]) + std::string(m[2]) + (numeric ? "1" : "\"1\"") + " ' Default for Android (was " + std::string(m[3]) + ")";
+        });
+    }
 
     if (count > 0) {
         LogPatch("Patched PinUp Player file access for Android", count);
@@ -1792,7 +1857,10 @@ End Class
 
 )";
         // Insert after Option Explicit if present, otherwise at start
-        static const RE2 optionExplicit(R"((?i)(Option\s+Explicit[^\r\n]*\r?\n))");
+        // The statement, at the start of a line: not the words inside a comment
+        // (Playboy MOD: "' Moved the Option Explicit line down ...", error 1002).
+        // A line may end in CR alone or LF CR (Agents 777, Time Machine).
+        static const RE2 optionExplicit(R"((?i)((?:^|[\r\n])[ \t]*Option[ \t]+Explicit[^\r\n]*[\r\n]+))");
         std::string before = r;
         r = RE2Replace(r, optionExplicit, "\\1" + arrayListClass);
         if (r == before) {
@@ -2303,7 +2371,10 @@ End Class
     std::string r = script;
 
     // Find insertion point - after Option Explicit or at start
-    static const RE2 optionExplicit(R"((?i)(Option\s+Explicit[^\r\n]*[\r\n]+))");
+    // The statement, at the start of a line: not the words inside a comment (Playboy
+    // MOD, Kessel Run: helpers landed above the real Option Explicit, error 1002).
+    // A line may end in CR alone or LF CR (Agents 777, Time Machine).
+    static const RE2 optionExplicit(R"((?i)((?:^|[\r\n])[ \t]*Option[ \t]+Explicit[^\r\n]*[\r\n]+))");
     RE2Match match;
     if (RE2FindFirst(r, optionExplicit, match)) {
         r = r.substr(0, match.position + match.length) + helpers + r.substr(match.position + match.length);
@@ -2361,7 +2432,14 @@ std::string SimpleScriptPatcher::PatchScript(const std::string& script, const st
     // relied on the conversion, gate this behind a flag rather than re-enabling globally.
     // result = PatchDTArray(result);                  // DT class conversion; many WPC tables
     // result = PatchSTArray(result);                  // ST class conversion; Monster Bash, TZ, Dr Who
-    result = PatchAmbiguousCallParens(result);      // Defender VPW v1.4
+    // result = PatchAmbiguousCallParens(result);   // DISABLED 2026-10-24: parser.y's SubFirstArg rule
+                                                    // already parses `Sub (a)+b` at statement start, and
+                                                    // now with operator precedence (Flying Turns). The
+                                                    // rule only did damage: it also wrapped expressions
+                                                    // (x = Sqr (a)^2 + b -> Sqr((a)^2 + b), Theatre of
+                                                    // Magic; LampState (130)*1.5 -> LampState(195)), a
+                                                    // "(" inside a string (Nightmare Before Christmas,
+                                                    // 1017) and an index list (Skyrocket, 1006).
     result = PatchPinUpPlayerFileAccess(result);    // Thundercats 1.0.9
     result = PatchForwardConstantReference(result); // Wheel of Fortune Stern, Flash Gordon VPW, Cactus Canyon
     result = PatchSolCallbackBlock(result);         // Playboy (Bally 1978); repo issue #267

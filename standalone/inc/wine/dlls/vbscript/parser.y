@@ -40,6 +40,7 @@ static expression_t *new_long_expression(parser_ctx_t*,expression_type_t,LONG);
 static expression_t *new_double_expression(parser_ctx_t*,double);
 static expression_t *new_unary_expression(parser_ctx_t*,expression_type_t,expression_t*);
 static expression_t *new_binary_expression(parser_ctx_t*,expression_type_t,expression_t*,expression_t*);
+static expression_t *combine_sub_first_arg(parser_ctx_t*,expression_type_t,expression_t*,expression_t*);
 static expression_t *new_new_expression(parser_ctx_t*,const WCHAR*);
 
 static member_expression_t *new_member_expression(parser_ctx_t*,expression_t*,const WCHAR*);
@@ -238,7 +239,7 @@ SimpleStatement
                                               call_expression_t *call_expr;
                                               first_arg = new_unary_expression(ctx, EXPR_BRACKETS, $2);
                                               CHECK_ERROR;
-                                              combined = new_binary_expression(ctx, $3, first_arg, $4);
+                                              combined = combine_sub_first_arg(ctx, $3, first_arg, $4);
                                               CHECK_ERROR;
                                               combined->next = $5;
                                               call_expr = new_call_expression(ctx, $1, combined);
@@ -848,6 +849,44 @@ static expression_t *new_binary_expression(parser_ctx_t *ctx, expression_type_t 
     expr->left = left;
     expr->right = right;
     return &expr->expr;
+}
+
+/* VBScript binary operator precedence, higher binds tighter; non-binary
+ * expressions (literals, calls, brackets, Not, unary minus) are operands. */
+static int binary_precedence(expression_type_t type)
+{
+    switch(type) {
+    case EXPR_EXP:                     return 12;
+    case EXPR_MUL: case EXPR_DIV:      return 10;
+    case EXPR_IDIV:                    return 9;
+    case EXPR_MOD:                     return 8;
+    case EXPR_ADD: case EXPR_SUB:      return 7;
+    case EXPR_CONCAT:                  return 6;
+    case EXPR_EQUAL: case EXPR_NEQUAL: case EXPR_LT: case EXPR_GT:
+    case EXPR_LTEQ: case EXPR_GTEQ: case EXPR_IS:
+                                       return 5;
+    case EXPR_AND:                     return 4;
+    case EXPR_OR:                      return 3;
+    case EXPR_XOR:                     return 2;
+    case EXPR_EQV:                     return 1;
+    case EXPR_IMP:                     return 0;
+    default:                           return 100;
+    }
+}
+
+/* VPX: `Sub (a) OP rest` (SubFirstArgOp) parses rest as a whole Expression; the
+ * first argument is `(a) OP rest` with OP at its own precedence, not
+ * OP((a), rest). Joining at the root made `o.Kick (5 - 1)/2 + 1, 21.5` pass
+ * (5 - 1)/(2 + 1) (Flying Turns). Push (a) down the left edge of rest past every
+ * operator that binds as loose as OP or looser (all are left-associative). */
+static expression_t *combine_sub_first_arg(parser_ctx_t *ctx, expression_type_t op, expression_t *left, expression_t *right)
+{
+    if(binary_precedence(right->type) <= binary_precedence(op)) {
+        binary_expression_t *bin = (binary_expression_t*)right;
+        bin->left = combine_sub_first_arg(ctx, op, left, bin->left);
+        return bin->left ? right : NULL;
+    }
+    return new_binary_expression(ctx, op, left, right);
 }
 
 static member_expression_t *new_member_expression(parser_ctx_t *ctx, expression_t *obj_expr, const WCHAR *identifier)

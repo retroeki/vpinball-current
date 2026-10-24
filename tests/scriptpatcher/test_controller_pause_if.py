@@ -52,7 +52,7 @@ except Exception:
 # --- rules under test, copied verbatim from simplescriptpatcher.cpp ---
 # Keep these in sync with PatchControllerPause if the C++ changes.
 pSubOnlyPause = _rx.compile(
-    r"(?i)(Sub\s+\w+(?:\s*\([^)]*\))?)\s*:\s*Controller\.Pause\s*=\s*(?:True|False|1|0)\s*:\s*(End\s+Sub)")
+    r"(?i)((?:^|[\r\n])[ \t]*(?:(?:Public|Private)[ \t]+)?)(Sub\s+\w+(?:\s*\([^)]*\))?)\s*:\s*Controller\.Pause\s*=\s*(?:True|False|1|0)\s*:\s*(End\s+Sub)")
 p1 = _rx.compile(r"(?i):[ \t]*Controller\.Pause\s*=\s*(True|False|1|0)[ \t]*:")
 # THE FIX (pPauseIf):
 pPauseIf = _rx.compile(r"(?i)(If\b[^\r\n]*?\bThen[ \t]+)Controller\.Pause[ \t]*=[ \t]*(?:True|False|1|0)")
@@ -60,7 +60,7 @@ p2 = _rx.compile(r"(?i)(\s*)(Controller\.Pause\s*=\s*(True|False|1|0))")
 
 
 def patch(script, with_fix):
-    s = pSubOnlyPause.sub(r"\g<1>" + "\r\n\t' Controller.Pause disabled for Android\r\n" + r"\g<2>", script)
+    s = pSubOnlyPause.sub(r"\g<1>\g<2>" + "\r\n\t' Controller.Pause disabled for Android\r\n" + r"\g<3>", script)
     s = p1.sub(":", s)
     if with_fix:
         s = pPauseIf.sub(r"\g<1>Exit Sub ' Controller.Pause disabled for Android", s)
@@ -127,6 +127,25 @@ OWN_LINE = "Controller.Pause = False\r\n"
 out = patch(OWN_LINE, with_fix=True)
 check("' Controller.Pause = False ' Disabled for Android" in out and "Exit Sub" not in out,
       "own-line Controller.Pause: commented by p2, pPauseIf does not touch it")
+
+# 5. pSubOnlyPause only rewrites a live single-line Sub (crash triage 2026-10-23,
+#    cluster D: Flash Gordon, Alien Covenant, Big Town). An author's commented-out
+#    copy used to be split onto three lines, leaving a live `End Sub` (1002).
+COMMENTED = ("'Sub table1_Paused:Controller.Pause = 1:End Sub\r\n"
+             "Sub table1_Exit:Controller.Pause = 1:End Sub\r\n"
+             "Private Sub Other:Controller.Pause = 0:End Sub\r\n")
+out = patch(COMMENTED, with_fix=True)
+check(out.startswith("'Sub table1_Paused:End Sub\r\n"),
+      "commented-out single-line Pause Sub: stays one comment line")
+check("Sub table1_Exit\r\n\t' Controller.Pause disabled for Android\r\nEnd Sub" in out,
+      "live single-line Pause Sub: still split into a valid multi-line Sub")
+check("Private Sub Other\r\n\t' Controller.Pause disabled for Android\r\nEnd Sub" in out,
+      "Private single-line Pause Sub: split too")
+# Lone-CR line endings (Agents 777-style files): the anchor accepts CR.
+LONE_CR = "Dim a\r'Sub P:Controller.Pause = 1:End Sub\rSub Q:Controller.Pause = 1:End Sub\r"
+out = patch(LONE_CR, with_fix=True)
+check("'Sub P:End Sub\r" in out and "Sub Q\r\n\t' Controller.Pause disabled" in out,
+      "lone-CR file: comment left alone, live Sub split")
 
 print()
 print(f"engine: {ENGINE}")
