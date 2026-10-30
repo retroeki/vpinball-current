@@ -107,6 +107,10 @@ private:
       VPXTexture glass;
       VPXTexture dmdTex;
       int liveStyle;
+      // Sharper copy of a colour DMD frame, when its source draws one (CTLPI_DISPLAY_GET_DETAIL_FRAME_MSG)
+      VPXTexture detailTex = nullptr;
+      unsigned int detailFrameId = 0;
+      std::vector<uint8_t> detailData;
    };
    struct Layout
    {
@@ -146,7 +150,7 @@ private:
    const MsgPluginAPI* const m_msgApi;
    const unsigned int m_endpointId;
 
-   unsigned int m_onDmdChangedMsgId, m_onSegChangedMsgId;
+   unsigned int m_onDmdChangedMsgId, m_onSegChangedMsgId, m_getDetailFrameMsgId;
    static void OnResChanged(const unsigned int msgId, void* userData, void* msgData);
 };
 

@@ -1,6 +1,7 @@
 #include "AssetManager.h"
 #include "Font.h"
 
+#include <algorithm>
 #include <filesystem>
 
 #include "common.h"
@@ -327,10 +328,8 @@ Bitmap* AssetManager::GetBitmap(AssetSrc* pSrc)
       pCachedBitmap->AddRef();
       m_cachedBitmaps[pSrc->GetId()] = pCachedBitmap;
       // LOGI("Bitmap added to cache: %s", pSrc->GetId().c_str());
-      if (pSrc->GetAssetType() == AssetType_Image) {
-         for (BitmapFilter* pFilter : pSrc->GetBitmapFilters())
-            pFilter->Filter(pCachedBitmap);
-      }
+      if (pSrc->GetAssetType() == AssetType_Image)
+         ApplyFilters(pSrc, pCachedBitmap);
       return pCachedBitmap;
    }
    else {
@@ -346,8 +345,7 @@ Bitmap* AssetManager::GetBitmap(AssetSrc* pSrc)
                 pCachedBitmap = new Bitmap(pCachedBitmap);
                 pCachedBitmap->AddRef();
                 m_cachedBitmaps[pSrc->GetId()] = pCachedBitmap;
-                for (BitmapFilter* pFilter : pSrc->GetBitmapFilters())
-                   pFilter->Filter(pCachedBitmap);
+                ApplyFilters(pSrc, pCachedBitmap);
                 // LOGI("Bitmap added to cache: %s", pSrc->GetId().c_str());
              }
           }
@@ -355,6 +353,33 @@ Bitmap* AssetManager::GetBitmap(AssetSrc* pSrc)
       }
    }
    return nullptr;
+}
+
+// Applies the source's filters. When they lower the bitmap's resolution (dmd=), the art is also
+// kept at full resolution, through the same filters minus the downscale, for the detail frame
+// (FlexDMD::RenderDetail). The filtered bitmap is the same either way: every filter still runs
+// on it in the same order as before. Only images with 'dmd=' pay for the extra copy (in the
+// table corpus, only JP's DMD code uses it); a 'region=' or 'pad=' filter drops the copy.
+void AssetManager::ApplyFilters(AssetSrc* pSrc, Bitmap* pBitmap)
+{
+   const vector<BitmapFilter*>& filters = pSrc->GetBitmapFilters();
+   Bitmap* pDetail = std::any_of(filters.begin(), filters.end(), [](const BitmapFilter* pFilter) { return pFilter->LowersResolution(); })
+      ? new Bitmap(pBitmap) : nullptr;
+   for (BitmapFilter* pFilter : filters)
+   {
+      pFilter->Filter(pBitmap);
+      if (pDetail && !pFilter->FilterDetail(pDetail))
+      {
+         pDetail->Release();
+         pDetail = nullptr;
+      }
+   }
+   if (pDetail)
+   {
+      pBitmap->SetDetailSurface(pDetail->TakeSurface());
+      pDetail->Release();
+      m_hasDetail = true;
+   }
 }
 
 Font* AssetManager::GetFont(AssetSrc* pSrc)

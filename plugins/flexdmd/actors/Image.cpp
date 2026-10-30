@@ -67,7 +67,7 @@ void Image::Draw(Flex::SurfaceGraphics* pGraphics)
       float y = 0;
       Layout::Align(m_alignment, w, h, GetWidth(), GetHeight(), x, y);
       SDL_Rect rect = { (int)(GetX() + x), (int)(GetY() + y), (int)w, (int)h };
-      pGraphics->DrawImage(m_pBitmap->GetSurface(), nullptr, &rect);
+      pGraphics->DrawBitmap(m_pBitmap, &rect);
    }
 }
 

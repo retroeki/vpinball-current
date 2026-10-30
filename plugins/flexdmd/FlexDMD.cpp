@@ -83,6 +83,34 @@ void FlexDMD::Render()
    }
 }
 
+// Draws the detail frame after Render. Skipped while the regular frame is unchanged since the
+// last detail frame (JP's DMDs sit still between updates). Returns whether it was drawn.
+bool FlexDMD::RenderDetail()
+{
+   if (m_pSurface == nullptr || m_renderLockCount > 0 || !HasDetailArt())
+      return false;
+   const SDL_Surface* const surf = m_pSurface->GetSurface();
+   const uint8_t* const pixels = static_cast<const uint8_t*>(surf->pixels);
+   const size_t size = static_cast<size_t>(surf->pitch) * surf->h;
+   if (m_pDetailSurface && m_detailSource.size() == size && memcmp(m_detailSource.data(), pixels, size) == 0)
+      return false;
+   m_detailSource.assign(pixels, pixels + size);
+   if (m_pDetailSurface == nullptr)
+   {
+      SDL_Surface* pSurface = SDL_CreateSurface(m_width * kDetailScale, m_height * kDetailScale, SDL_PIXELFORMAT_RGB24);
+      if (pSurface == nullptr)
+         return false;
+      m_pDetailSurface = new Flex::SurfaceGraphics(pSurface, kDetailScale);
+   }
+   if (m_clear)
+   {
+      m_pDetailSurface->SetColor(RGB(0, 0, 0));
+      m_pDetailSurface->Clear();
+   }
+   m_pStage->Draw(m_pDetailSurface);
+   return true;
+}
+
 uint8_t* FlexDMD::UpdateLum8Frame()
 {
    if ((m_lum8Frame != nullptr) && !m_lum8FrameDirty)

@@ -5,9 +5,12 @@
 
 #include <functional>
 #include <cassert>
+#include <cstring>
 #include <mutex>
 #include <thread>
 #include <unordered_map>
+
+#include <SDL3/SDL_timer.h>
 
 #include "common.h"
 
@@ -343,6 +346,21 @@ struct PublishedFrame
 static std::unordered_map<uint32_t, PublishedFrame> publishedFrames;
 static unsigned int onPrepareFrameId;
 
+// Detail frames (CTLPI_DISPLAY_GET_DETAIL_FRAME_MSG), drawn on the game thread like the regular
+// ones, only while a view asked for one in the last kDetailRequestTimeoutMs
+static constexpr uint64_t kDetailRequestTimeoutMs = 1000;
+struct PublishedDetail
+{
+   uint64_t requestTick = 0;
+   unsigned int frameId = 0; // unique across instances, so a view switching instance never keeps a stale frame
+   unsigned int width = 0;
+   unsigned int height = 0;
+   std::vector<uint8_t> data;
+};
+static std::unordered_map<uint32_t, PublishedDetail> publishedDetails;
+static unsigned int lastDetailFrameId = 0;
+static unsigned int getDetailFrameId;
+
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 // Alphanumeric segment displays
@@ -614,6 +632,75 @@ static void onGetSegSrc(const unsigned int eventId, void* userData, void* msgDat
 static bool hasDMD = false;
 static unsigned int getDmdSrcId, onDmdSrcChangeId;
 
+// Detail frame (fork-local, 2026-10-30)
+//
+// Why: JP's DMD code (Gargamel Park, Burner, Foo Fighters and mods copying it) loads every image
+// as "VPX.<image>&dmd=2", which halves it (DotFilter) before FlexDMD draws it into the 256x64
+// frame. That suits a physical DMD but looked blocky in the phone's ScoreView panel.
+//
+// What: for scenes with such images, FlexDMD also draws the scene at FlexDMD::kDetailScale (2x,
+// 512x128) from the full-resolution art (Bitmap::GetDetailSurface) and hands it to the ScoreView
+// through CTLPI_DISPLAY_GET_DETAIL_FRAME_MSG.
+//
+// What does not change: the regular frame (GetRenderFrame) is drawn exactly as before, so external
+// DMDs (DMDUtil: ZeDMD, DMDServer), B2S, replays and every table without 'dmd=' images get the
+// same pixels as before. Gray (mono) FlexDMD frames never get a detail frame.
+//
+// Cost: game thread only, and only while the ScoreView asks (stops 1 s after the panel goes) and
+// the regular frame changed. Measured on device: ~1.2-2 ms per changed frame (JP's attract
+// blink changes it ~5 times a second, gameplay mostly on score changes).
+//
+// Game thread only: draws the detail frame while a view keeps asking for it, and publishes a copy
+static void RenderDetailFrame(FlexDMD* pFlex)
+{
+   if (pFlex->GetRenderMode() != RenderMode_DMD_RGB || !pFlex->HasDetailArt())
+      return;
+   {
+      std::lock_guard<std::mutex> lock(flexDmdsMutex);
+      const auto detail = publishedDetails.find(pFlex->GetId());
+      if (detail == publishedDetails.end() || SDL_GetTicks() - detail->second.requestTick > kDetailRequestTimeoutMs)
+         return;
+   }
+   const bool drawn = pFlex->RenderDetail();
+   const SDL_Surface* const surf = pFlex->GetDetailSurface();
+   if (drawn && surf)
+   {
+      std::lock_guard<std::mutex> lock(flexDmdsMutex);
+      PublishedDetail& detail = publishedDetails[pFlex->GetId()];
+      detail.frameId = ++lastDetailFrameId;
+      detail.width = surf->w;
+      detail.height = surf->h;
+      const size_t rowSize = static_cast<size_t>(surf->w) * 3;
+      detail.data.resize(rowSize * surf->h);
+      for (int y = 0; y < surf->h; y++)
+         memcpy(detail.data.data() + y * rowSize, static_cast<const uint8_t*>(surf->pixels) + y * surf->pitch, rowSize);
+   }
+}
+
+// Any thread: the last detail frame of a display, which also keeps it drawn (see RenderDetailFrame)
+static void OnGetDetailFrame(const unsigned int eventId, void* userData, void* msgData)
+{
+   GetDetailFrameMsg& msg = *static_cast<GetDetailFrameMsg*>(msgData);
+   if (msg.id.endpointId != endpointId)
+      return;
+   std::lock_guard<std::mutex> lock(flexDmdsMutex);
+   if (publishedFrames.find(msg.id.resId) == publishedFrames.end())
+      return; // not a FlexDMD display (yet)
+   PublishedDetail& detail = publishedDetails[msg.id.resId];
+   detail.requestTick = SDL_GetTicks();
+   if (detail.data.empty())
+      return;
+   msg.width = detail.width;
+   msg.height = detail.height;
+   msg.frame = { detail.frameId, nullptr };
+   if (detail.frameId != msg.knownFrameId)
+   {
+      thread_local std::vector<uint8_t> copy;
+      copy = detail.data;
+      msg.frame.frame = copy.data();
+   }
+}
+
 // Game thread only: draws the scene and publishes a copy of the frame for other threads
 static DisplayFrame RenderFrame(FlexDMD* pFlex)
 {
@@ -640,6 +727,7 @@ static DisplayFrame RenderFrame(FlexDMD* pFlex)
          published.data.assign(static_cast<const uint8_t*>(frame.frame), static_cast<const uint8_t*>(frame.frame) + size);
       }
    }
+   RenderDetailFrame(pFlex);
    return frame;
 }
 
@@ -759,6 +847,7 @@ static void OnFlexDestroyed(FlexDMD* pFlex)
       std::lock_guard<std::mutex> lock(flexDmdsMutex);
       std::erase(flexDmds, pFlex);
       publishedFrames.erase(pFlex->GetId());
+      publishedDetails.erase(pFlex->GetId());
    }
    if (showChanged)
       OnShowChanged(pFlex);
@@ -787,6 +876,9 @@ MSGPI_EXPORT void MSGPIAPI FlexDMDPluginLoad(const uint32_t sessionId, const Msg
    // Scenes are drawn on the game thread, once per frame (see flexDmdsMutex)
    onPrepareFrameId = msgApi->GetMsgID(VPXPI_NAMESPACE, VPXPI_EVT_ON_PREPARE_FRAME);
    msgApi->SubscribeMsg(endpointId, onPrepareFrameId, OnPrepareFrame, nullptr);
+   // Sharper frames for on-screen views (see RenderDetailFrame)
+   getDetailFrameId = msgApi->GetMsgID(CTLPI_NAMESPACE, CTLPI_DISPLAY_GET_DETAIL_FRAME_MSG);
+   msgApi->SubscribeMsg(endpointId, getDetailFrameId, OnGetDetailFrame, nullptr);
 
    unsigned int getVpxApiId = msgApi->GetMsgID(VPXPI_NAMESPACE, VPXPI_MSG_GET_API);
    msgApi->BroadcastMsg(endpointId, getVpxApiId, &vpxApi);
@@ -875,6 +967,8 @@ MSGPI_EXPORT void MSGPIAPI FlexDMDPluginUnload()
 
    msgApi->UnsubscribeMsg(onPrepareFrameId, OnPrepareFrame);
    msgApi->ReleaseMsgID(onPrepareFrameId);
+   msgApi->UnsubscribeMsg(getDetailFrameId, OnGetDetailFrame);
+   msgApi->ReleaseMsgID(getDetailFrameId);
    msgApi->ReleaseMsgID(onSegSrcChangedId);
    msgApi->ReleaseMsgID(getSegSrcId);
    msgApi->ReleaseMsgID(onDmdSrcChangeId);

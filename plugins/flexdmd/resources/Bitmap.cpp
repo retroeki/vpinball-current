@@ -23,6 +23,39 @@ Bitmap::~Bitmap()
       else if (m_assetType == AssetType_GIF)
          IMG_FreeAnimation(static_cast<IMG_Animation*>(m_pData));
    }
+   SetDetailSurface(nullptr);
+}
+
+SDL_Surface* Bitmap::TakeSurface()
+{
+   SDL_Surface* const pSurface = GetSurface();
+   if (pSurface)
+      m_pData = nullptr;
+   return pSurface;
+}
+
+void Bitmap::SetDetailSurface(SDL_Surface* pDetail)
+{
+   SDL_DestroySurface(m_pScaledDetail);
+   m_pScaledDetail = nullptr;
+   SDL_DestroySurface(m_pDetail);
+   m_pDetail = pDetail;
+}
+
+SDL_Surface* Bitmap::GetScaledDetail(int w, int h)
+{
+   if (m_pDetail == nullptr || w <= 0 || h <= 0)
+      return nullptr;
+   if (m_pScaledDetail && m_pScaledDetail->w == w && m_pScaledDetail->h == h)
+      return m_pScaledDetail;
+   SDL_DestroySurface(m_pScaledDetail);
+   m_pScaledDetail = SDL_CreateSurface(w, h, m_pDetail->format);
+   if (m_pScaledDetail && !SDL_StretchSurface(m_pDetail, nullptr, m_pScaledDetail, nullptr, SDL_SCALEMODE_LINEAR))
+   {
+      SDL_DestroySurface(m_pScaledDetail);
+      m_pScaledDetail = nullptr;
+   }
+   return m_pScaledDetail;
 }
 
 void Bitmap::SetData(void* pData)

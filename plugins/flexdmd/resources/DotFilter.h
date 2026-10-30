@@ -11,6 +11,8 @@ public:
    ~DotFilter() override = default;
 
    void Filter(Bitmap* pBitmap) override;
+   bool LowersResolution() const override { return m_dotSize > 1; }
+   bool FilterDetail(Bitmap* pBitmap) override;
 
    int GetDotSize() const { return m_dotSize; }
    void SetDotSize(int dotSize) { m_dotSize = dotSize; }

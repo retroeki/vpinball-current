@@ -43,4 +43,34 @@ void DotFilter::Filter(Bitmap* pBitmap)
    pBitmap->SetData(dst);
 }
 
+// Full-resolution art keeps every pixel, brightened like a dot of one colour in Filter
+bool DotFilter::FilterDetail(Bitmap* pBitmap)
+{
+   SDL_Surface* const src = pBitmap->GetSurface();
+
+   if (!src)
+      return false;
+
+   SDL_Surface* const dst = SDL_CreateSurface(src->w, src->h, SDL_PIXELFORMAT_RGBA32);
+
+   ColorRGBA32* const pixels = (uint32_t*)dst->pixels;
+
+   const float gain = (float)(m_dotSize * m_dotSize) / (1.0f + (float)(m_dotSize * m_dotSize) / 1.8f);
+   for (int y = 0; y < dst->h; y++) {
+      for (int x = 0; x < dst->w; x++) {
+         ColorRGBA32 pixel = GetPixel(src, x, y);
+         uint8_t cr,cg,cb,ca;
+         SDL_GetRGBA(pixel, SDL_GetPixelFormatDetails(src->format), SDL_GetSurfacePalette(src), &cr, &cg, &cb, &ca);
+         pixels[(y * dst->w) + x] = SDL_MapSurfaceRGBA(dst,
+            (uint8_t)min((float)cr * gain, 255.f),
+            (uint8_t)min((float)cg * gain, 255.f),
+            (uint8_t)min((float)cb * gain, 255.f),
+            (uint8_t)min((float)ca * gain, 255.f));
+      }
+   }
+
+   pBitmap->SetData(dst);
+   return true;
+}
+
 }

@@ -28,8 +28,14 @@ public:
    void* Open(AssetSrc* pSrc);
    void ClearAll();
 
+   // Whether a loaded bitmap kept full-resolution art for the detail frame (see ApplyFilters)
+   bool HasDetail() const { return m_hasDetail; }
+
 private:
+   void ApplyFilters(AssetSrc* pSrc, Bitmap* pBitmap);
+
    VPXPluginAPI* m_vpxApi = nullptr;
+   bool m_hasDetail = false;
 
    ankerl::unordered_dense::map<string, Bitmap*> m_cachedBitmaps;
    ankerl::unordered_dense::map<string, Font*> m_cachedFonts;

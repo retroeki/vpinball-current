@@ -49,6 +49,7 @@ ScoreView::ScoreView(const MsgPluginAPI* api, unsigned int endpointId, VPXPlugin
    m_msgApi->SubscribeMsg(m_endpointId, m_onDmdChangedMsgId, OnResChanged, this);
    m_onSegChangedMsgId = m_msgApi->GetMsgID(CTLPI_NAMESPACE, CTLPI_SEG_ON_SRC_CHG_MSG);
    m_msgApi->SubscribeMsg(m_endpointId, m_onSegChangedMsgId, OnResChanged, this);
+   m_getDetailFrameMsgId = m_msgApi->GetMsgID(CTLPI_NAMESPACE, CTLPI_DISPLAY_GET_DETAIL_FRAME_MSG);
 }
 
 ScoreView::~ScoreView()
@@ -58,12 +59,17 @@ ScoreView::~ScoreView()
    m_msgApi->ReleaseMsgID(m_onSegChangedMsgId);
    m_msgApi->UnsubscribeMsg(m_onDmdChangedMsgId, OnResChanged);
    m_msgApi->ReleaseMsgID(m_onDmdChangedMsgId);
+   m_msgApi->ReleaseMsgID(m_getDetailFrameMsgId);
    for (auto& image : m_images)
       m_vpxApi->DeleteTexture(image.second);
    for (auto& layout : m_layouts)
       for (auto& visual : layout.visuals)
+      {
          if (visual.dmdTex)
             m_vpxApi->DeleteTexture(visual.dmdTex);
+         if (visual.detailTex)
+            m_vpxApi->DeleteTexture(visual.detailTex);
+      }
 }
 
 void ScoreView::OnResChanged(const unsigned int msgId, void* userData, void* msgData)
@@ -691,6 +697,50 @@ bool ScoreView::Render(VPXRenderContext2D* ctx)
          ResURIResolver::DisplayState dmd = m_resURIResolver.GetDisplayState(visual.srcUri);
          if (dmd.state.frame == nullptr)
             continue;
+         // Detail frame: a colour frame whose source can draw a sharper copy is shown from that
+         // copy as a plain image. Today only FlexDMD answers, and only for scenes built from
+         // 'dmd=' images (JP's 2024+ originals: Gargamel Park, Burner, Foo Fighters, and mods
+         // copying his DMD code). It draws them at 2x from the full-resolution art instead of the
+         // halved art the regular 256x64 frame uses. Every other source answers nothing and
+         // falls through to the regular frame below, unchanged.
+         // External DMDs (DMDUtil) never send this request, so they keep the regular frame.
+         if (dmd.source->frameFormat != CTLPI_DISPLAY_FORMAT_LUM32F)
+         {
+            // The request also keeps FlexDMD drawing the detail frame; it stops one second after
+            // the last request (panel hidden), see FlexDMDPlugin.cpp RenderDetailFrame
+            GetDetailFrameMsg detail = {};
+            detail.id = dmd.source->id;
+            detail.knownFrameId = visual.detailFrameId; // pixels only come back when the frame changed
+            m_msgApi->BroadcastMsg(m_endpointId, m_getDetailFrameMsgId, &detail);
+            if (detail.width > 0 && detail.height > 0)
+            {
+               if (detail.frame.frame != nullptr)
+               {
+                  const uint8_t* const pixels = static_cast<const uint8_t*>(detail.frame.frame);
+                  visual.detailData.assign(pixels, pixels + static_cast<size_t>(detail.width) * detail.height * 3);
+                  visual.detailFrameId = detail.frame.frameId;
+               }
+               // Uploaded every frame, like the regular DMD texture below.
+               // KNOWN UNKNOWN: uploading only when the frame changed (visual.detailFrameId moved)
+               // did not reach the screen. On device the panel kept its first frame (GAME OVER)
+               // while FlexDMD drew the running game correctly (2026-10-30, Gargamel Park; FlexDMD
+               // frames dumped and checked). The root cause was never found: BaseTexture::Update,
+               // TextureManager::SetDirty/LoadTexture and the bgfx Sampler update/mipmap path all
+               // read correct. This fix copies the old panel's every-frame upload, the path known
+               // to work. Uploading only on change would save ~196 KB per frame, but it needs
+               // that root cause found first.
+               if (visual.detailData.size() == static_cast<size_t>(detail.width) * detail.height * 3)
+                  m_vpxApi->UpdateTexture(&visual.detailTex, detail.width, detail.height, VPXTextureFormat::VPXTEXFMT_sRGB8, visual.detailData.data());
+               if (visual.detailTex)
+               {
+                  ctx->DrawImage(ctx, visual.detailTex, visual.tint.x, visual.tint.y, visual.tint.z, 1.f,
+                     0.f, 0.f, static_cast<float>(detail.width), static_cast<float>(detail.height), // whole frame
+                     0.f, 0.f, 0.f, // no rotation
+                     px + visual.x, ctx->srcHeight - (py + visual.y) - visual.h, visual.w, visual.h);
+                  break;
+               }
+            }
+         }
          LoadGlass(visual);
          m_vpxApi->UpdateTexture(&visual.dmdTex, dmd.source->width, dmd.source->height,
               dmd.source->frameFormat == CTLPI_DISPLAY_FORMAT_LUM32F  ? VPXTextureFormat::VPXTEXFMT_BW32F

@@ -74,6 +74,13 @@ public:
    void SetClear(bool v) { m_clear = v; }
 
    void Render();
+   // Detail frame: the scene drawn again at kDetailScale for on-screen views, with bitmaps
+   // loaded through a dot filter (dmd=) drawn from their full-resolution art. The regular
+   // frame, which external DMDs get, is not touched.
+   static constexpr int kDetailScale = 2;
+   bool HasDetailArt() const { return m_pAssetManager->HasDetail(); }
+   bool RenderDetail();
+   SDL_Surface* GetDetailSurface() const { return m_pDetailSurface ? m_pDetailSurface->GetSurface() : nullptr; }
    const std::vector<uint32_t>& GetDmdColoredPixels();
    const std::vector<uint8_t>& GetDmdPixels();
 
@@ -121,8 +128,17 @@ private:
          m_onDMDChangedHandler(this);
    }
 
+   void DiscardDetail()
+   {
+      if (m_pDetailSurface)
+         SDL_DestroySurface(m_pDetailSurface->GetSurface());
+      delete m_pDetailSurface; m_pDetailSurface = nullptr;
+      m_detailSource.clear();
+   }
+
    void DiscardFrames()
    {
+      DiscardDetail();
       delete m_pSurface; m_pSurface = nullptr;
       delete[] m_rgbFrame; m_rgbFrame = nullptr;
       delete[] m_lum8Frame; m_lum8Frame = nullptr;
@@ -167,6 +183,8 @@ private:
    bool m_run = false;
    uint32_t m_id = 0;
    SurfaceGraphics* m_pSurface = nullptr;
+   SurfaceGraphics* m_pDetailSurface = nullptr;
+   std::vector<uint8_t> m_detailSource; // regular frame the detail frame was drawn with
 
    //std::thread* m_pThread;
    //void RenderLoop();

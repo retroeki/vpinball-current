@@ -224,6 +224,24 @@ typedef struct GetDisplaySrcMsg
    DisplaySrcId* entries;      // Pointer to an array of maxEntryCount entries to be filled
 } GetDisplaySrcMsg;
 
+// Fork-local: a sharper copy of a display's render frame, for on-screen views. Message data is
+// a pointer to a GetDetailFrameMsg. A source answers for its own displays when it can draw one
+// (FlexDMD drawing 'dmd=' art at full resolution, like JP's DMDs). Physical DMD outputs never
+// ask, so they keep the render frame. Sources only draw it while a view keeps asking.
+#define CTLPI_DISPLAY_GET_DETAIL_FRAME_MSG        "GetDetailFrame"
+
+typedef struct GetDetailFrameMsg
+{
+   // Request
+   CtlResId id;                // Display to get the detail frame of
+   unsigned int knownFrameId;  // Detail frame id the caller already has, 0 for none
+   // Response, left 0/null when the source has no detail frame for this display
+   unsigned int width;
+   unsigned int height;
+   DisplayFrame frame;         // sRGB888, owned by the source until the next request from the same thread.
+                               // frame.frame is null when frame.frameId is knownFrameId (unchanged)
+} GetDetailFrameMsg;
+
 
 ///////////////////////////////////////////////////////////////////////////////
 //

@@ -11,6 +11,7 @@ public:
    ~AdditiveFilter() override = default;
 
    void Filter(Bitmap* pBitmap) override;
+   bool FilterDetail(Bitmap* pBitmap) override { Filter(pBitmap); return true; }
 };
 
 }
